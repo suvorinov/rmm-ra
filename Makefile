@@ -62,10 +62,10 @@ backup: ## Создать архив данных и конфигов в ./backu
 	@mkdir -p $(BACKUP_DIR)
 	@echo "$(YELLOW)Создаю бэкап...$(NC)"
 	docker run --rm \
-		-e TZ=$(TZ) \
+		-e BACKUP_NAME="rmm-ra-$$(date +%Y%m%d-%H%M%S).tar.gz" \
 		-v "$(CURDIR):/src:ro" \
 		-v "$(CURDIR)/$(BACKUP_DIR):/backup" \
-		alpine:latest sh -c 'tar czf /backup/rmm-ra-$$(date +%Y%m%d-%H%M%S).tar.gz -C /src docker-compose.yml .env .env.example Makefile README.md .gitignore scripts meshcentral-data rustdesk-data && chmod 600 /backup/*.tar.gz'
+		alpine:latest sh -c 'tar czf "/backup/$$BACKUP_NAME" -C /src docker-compose.yml .env .env.example Makefile README.md .gitignore scripts meshcentral-data rustdesk-data && chmod 600 /backup/*.tar.gz'
 	@echo "$(GREEN)Готово. Архив лежит в $(BACKUP_DIR)/$(NC)"
 
 lock-registration: ## Закрыть регистрацию новых аккаунтов (после создания админа)
