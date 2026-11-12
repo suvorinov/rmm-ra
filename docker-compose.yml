@@ -1,0 +1,70 @@
+services:
+  meshcentral:
+    image: ghcr.io/ylianst/meshcentral:latest
+    container_name: meshcentral
+    restart: unless-stopped
+    environment:
+      - HOSTNAME=rmm.zr.local
+      - TZ=${TZ:-Europe/Moscow}
+      # ВНИМАНИЕ: при DYNAMIC_CONFIG=false переменные entrypoint игнорируются,
+      # источник истины — meshcentral-data/config.json (см. README).
+      - ALLOW_NEW_ACCOUNTS=${MC_ALLOW_NEW_ACCOUNTS}
+      - DYNAMIC_CONFIG=${MC_DYNAMIC_CONFIG}
+    volumes:
+      - ./meshcentral-data:/opt/meshcentral/meshcentral-data
+      - ./meshcentral-files:/opt/meshcentral/meshcentral-files
+      - ./meshcentral-backups:/opt/meshcentral/meshcentral-backups
+    # Убираем ports полностью! MeshCentral будет доступен только внутри сети Docker через NPM.
+    # Если очень нужен прямой доступ для отладки, раскомментируй строку ниже:
+    # ports:
+    #   - "127.0.0.1:10443:443"
+    # ВАЖНО: из-за tlsOffload MeshCentral слушает ПЛОСКИЙ HTTP на порту 443.
+    # Поэтому NPM должен проксировать на http://meshcentral:443 (Scheme = http).
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:443/',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+    networks:
+      - zr_admin_net  # <-- Подключаем к твоей основной сети
+
+  # RustDesk оставляем как есть, он не требует HTTP-проксирования через NPM
+  hbbs:
+    image: rustdesk/rustdesk-server:latest
+    container_name: rustdesk-hbbs
+    restart: unless-stopped
+    command: hbbs -r ${SERVER_IP:-192.168.0.9}:21117
+    environment:
+      - TZ=${TZ:-Europe/Moscow}
+    volumes:
+      - ./rustdesk-data:/root
+    ports:
+      - "21115:21115"
+      - "21116:21116"
+      - "21116:21116/udp"
+      - "21118:21118"
+    depends_on:
+      - hbbr
+    networks:
+      - zr_admin_net
+
+  hbbr:
+    image: rustdesk/rustdesk-server:latest
+    container_name: rustdesk-hbbr
+    restart: unless-stopped
+    command: hbbr
+    environment:
+      - TZ=${TZ:-Europe/Moscow}
+    volumes:
+      - ./rustdesk-data:/root
+    ports:
+      - "21117:21117"
+      - "21119:21119"
+    networks:
+      - zr_admin_net
+
+# Объявляем внешнюю сеть, которую создал твой основной docker-compose
+networks:
+  zr_admin_net:
+    external: true

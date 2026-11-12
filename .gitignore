@@ -1,0 +1,14 @@
+# Секреты и локальное окружение
+.env
+
+# Данные контейнеров (бинды) — не храним в git
+meshcentral-data/
+meshcentral-files/
+meshcentral-backups/
+rustdesk-data/
+backups/
+
+# Разное
+text.txt
+*.bak-*
+*.old
