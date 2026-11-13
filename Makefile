@@ -12,11 +12,11 @@ GREEN  = \033[0;32m
 YELLOW = \033[1;33m
 NC     = \033[0m # No Color
 
-.PHONY: help up down restart logs logs-mc logs-rd status pull update clean backup lock-registration rustdesk-key
+.PHONY: help up down restart logs logs-mc logs-rd status pull update clean backup lock-registration mesh-groups pin-cert reset-2fa rustdesk-info rustdesk-key
 
 help: ## Показать эту справку
 	@echo "$(YELLOW)Доступные команды для управления RMM-RA:$(NC)"
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-18s$(NC) %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(GREEN)%-18s$(NC) %s\n", $$1, $$2}'
 
 up: ## Запустить все сервисы в фоновом режиме
 	@echo "$(YELLOW)Запуск сервисов MeshCentral и RustDesk...$(NC)"
@@ -70,6 +70,19 @@ backup: ## Создать архив данных и конфигов в ./backu
 
 lock-registration: ## Закрыть регистрацию новых аккаунтов (после создания админа)
 	./scripts/lock-registration.sh
+
+mesh-groups: ## Показать ID групп устройств MeshCentral (для установки агентов)
+	@./scripts/mesh-id.sh; rc=$$?; if [ $$rc -eq 2 ]; then exit 0; else exit $$rc; fi
+
+pin-cert: ## Пришпилить сертификат NPM в MeshCentral (после смены сертификата)
+	./scripts/pin-npm-cert.sh
+
+reset-2fa: ## Аварийный сброс 2FA у админа (потерян телефон и резервные коды)
+	@echo "$(YELLOW)Только показать состояние:$(NC) ./scripts/reset-2fa.sh"
+	@echo "$(YELLOW)Сбросить (осторожно!):$(NC)   ./scripts/reset-2fa.sh --apply --yes"
+
+rustdesk-info: ## Параметры RustDesk для клиентов (адрес, ключ, порты, пиры)
+	@./scripts/rustdesk-info.sh
 
 # Полезная команда для RustDesk: показать сгенерированный ключ
 rustdesk-key: ## Показать публичный ключ RustDesk (нужен для настройки клиентов)

@@ -46,6 +46,34 @@ TLS терминируется на NPM, а MeshCentral работает с `tls
 
 `nginx-proxy` резолвится через Docker DNS, поэтому IP контейнера NPM может меняться.
 
+### Сертификат NPM и агенты
+
+Агент проверяет TLS-сертификат, который видит, и сообщает его SHA384 серверу.
+При TLS-offload агент видит сертификат **NPM**, а MeshCentral по умолчанию ждёт
+свой. Если в логах есть:
+
+```
+Agent bad web cert hash ... holding connection
+```
+
+— значит хэш сертификата NPM не прописан в MeshCentral. Исправляется одной
+командой (проверка хэша при этом **не отключается**):
+
+```bash
+make pin-cert
+```
+
+Скрипт считает SHA384 сертификата из NPM, прописывает его в
+`domains[""].certhash` конфига MeshCentral, делает бэкап и перезапускает
+контейнер. Запускать повторно после **каждой замены/продления сертификата**
+в NPM.
+
+Проверить без изменений:
+
+```bash
+./scripts/pin-npm-cert.sh --check
+```
+
 ## Источник истины конфигурации
 
 В `.env` стоит `MC_DYNAMIC_CONFIG=false`, поэтому entrypoint **не** применяет
@@ -65,6 +93,98 @@ TLS терминируется на NPM, а MeshCentral работает с `tls
 5. Админка NPM (порт `81`) не должна быть доступна из интернета.
 6. Сертификат `rmm.zr.local` выписан внутренним УЦ `ZR-ADMIN Root CA` —
    корневой сертификат нужно добавить в доверенные на клиентских машинах.
+
+## Массовая установка агентов (Ansible)
+
+Агенты на парк Windows/Linux-машин ставятся Ansible-ролью из соседнего проекта
+`~/working/ansible_project` (там же inventory `windows_hosts.yml`).
+
+1. Создать группу устройств в UI MeshCentral (**Мои устройства → Добавить
+   группу устройств**).
+2. Узнать её ID:
+   ```bash
+   make mesh-groups        # имя + meshid
+   ```
+3. Прогнать установку:
+   ```bash
+   cd ~/working/ansible_project
+   ./deploy_mesh_agent.sh --mesh-id <MESHID> --limit 192.168.0.90 --check
+   ./deploy_mesh_agent.sh --mesh-id <MESHID> --limit 192.168.0.90
+   ./deploy_mesh_agent.sh --mesh-id <MESHID>   # весь флот
+   ```
+
+Подробно — `~/working/ansible_project/MESHCENTRAL_AGENT.md`.
+
+## 2FA для администратора
+
+1. Войти в `https://rmm.zr.local` → **My Account** / **Мой аккаунт**.
+2. Открыть **Account security** / **Безопасность аккаунта**.
+3. **Manage authenticator app** / **Управление приложением для проверки
+   подлинности** → отсканировать QR-код в Google/Microsoft Authenticator →
+   ввести 6-значный код → подтвердить.
+4. Сразу открыть **Manage backup codes** / **Управление резервными кодами** →
+   сгенерировать 10 одноразовых кодов и сохранить их **вне сервера**.
+5. Перелогиниться и убедиться, что токен запрашивается.
+
+⚠️ Админ один, поэтому резервные коды критичны: без них потеря телефона
+означает потерю доступа. SMTP на сервере не настроен, поэтому 2FA по почте
+недоступна — используйте приложение + резервные коды.
+
+Если доступ всё-таки потерян:
+
+```bash
+make reset-2fa                              # показать состояние 2FA
+./scripts/reset-2fa.sh --apply --yes        # снять все вторые факторы
+```
+
+Скрипт останавливает MeshCentral, делает бэкап БД (`meshcentral.db.bak-*`),
+удаляет `otpsecret`/`otpkeys`/`otphkeys`/`otpekey`/`otpduo`/`otpdev` у
+`user//suvorinov`, уплотняет NeDB и поднимает контейнер обратно.
+
+## Клиенты RustDesk
+
+Сервер (`hbbs`/`hbbr`) уже работает. Клиентам нужны только адрес и публичный
+ключ — их показывает:
+
+```bash
+make rustdesk-info      # адрес, ключ, порты, число подключённых пиров
+```
+
+Массовая установка — ролью из `~/working/ansible_project` (та же обёртка, что и
+для MeshCentral):
+
+```bash
+cd ~/working/ansible_project
+./deploy_rustdesk.sh --prefetch       # один раз: положить установщики в кэш
+./deploy_rustdesk.sh --limit 192.168.0.143 --check
+./deploy_rustdesk.sh --limit 192.168.0.143
+./deploy_rustdesk.sh                 # весь парк, спросит подтверждение
+```
+
+Обёртка сама берёт `SERVER_IP` из `.env` и ключ из
+`rustdesk-data/id_ed25519.pub`. Установщики из `files/installers/`
+раздаются клиентам по WinRM (GitHub на клиентах не нужен). ID каждой машины
+сохраняется в `reports/rustdesk/<host>.txt`.
+
+Постоянный пароль для unattended-доступа:
+
+```bash
+./deploy_rustdesk.sh --limit 192.168.0.143 --ask-password
+./deploy_rustdesk.sh --ask-password    # на весь парк одним паролем
+```
+
+Роль кладёт его в конфиг службы и включает `verification-method=use-permanent-password`
+(одноразовый пароль с экрана клиента больше не нужен). Подключиться, не вводя
+пароль руками, можно штатным CLI:
+
+```powershell
+rustdesk.exe --connect 511788413 --password 'ТвойПароль'
+```
+
+В OSS-версии совсем без пароля нельзя: hbbs только сводит пиров, пароль
+проверяет сам удалённый хост.
+
+Подробно — `~/working/ansible_project/RUSTDESK_CLIENT.md`.
 
 ## Бэкап и восстановление
 
@@ -89,7 +209,9 @@ make up
 ## Полезное
 
 ```bash
-make rustdesk-key   # публичный ключ для настройки клиентов RustDesk
+make rustdesk-info  # адрес, ключ, порты и число пиров RustDesk
+make rustdesk-key   # только публичный ключ для настройки клиентов
+make mesh-groups    # ID групп устройств MeshCentral (для установки агентов)
 make pull           # скачать свежие образы
 make update         # обновить и перезапустить
 ```
