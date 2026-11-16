@@ -15,9 +15,18 @@
 
 Все контейнеры проекта — во внешней сети `zr_admin_net`.
 
+## Репозитории
+
+| Репозиторий | Что внутри |
+|---|---|
+| [rmm-ra](https://github.com/suvorinov/rmm-ra) | этот проект: серверная часть (MeshCentral, RustDesk hbbs/hbbr, NPM) и скрипты обслуживания |
+| [ansible_project](https://github.com/suvorinov/ansible_project) | Ansible-роли и обёртки для раскатки агентов MeshCentral и клиентов RustDesk на парк Windows/Linux |
+
 ## Быстрый старт
 
 ```bash
+git clone git@github.com:suvorinov/rmm-ra.git
+cd rmm-ra
 cp .env.example .env   # при первом развёртывании
 make up        # запустить стек
 make status    # статус контейнеров
@@ -97,7 +106,8 @@ make pin-cert
 ## Массовая установка агентов (Ansible)
 
 Агенты на парк Windows/Linux-машин ставятся Ansible-ролью из соседнего проекта
-`~/working/ansible_project` (там же inventory `windows_hosts.yml`).
+[ansible_project](https://github.com/suvorinov/ansible_project) — локально это
+`~/working/ansible_project`, там же inventory `windows_hosts.yml`.
 
 1. Создать группу устройств в UI MeshCentral (**Мои устройства → Добавить
    группу устройств**).
@@ -113,7 +123,7 @@ make pin-cert
    ./deploy_mesh_agent.sh --mesh-id <MESHID>   # весь флот
    ```
 
-Подробно — `~/working/ansible_project/MESHCENTRAL_AGENT.md`.
+Подробно — [MESHCENTRAL_AGENT.md](https://github.com/suvorinov/ansible_project/blob/main/MESHCENTRAL_AGENT.md).
 
 ## 2FA для администратора
 
@@ -150,8 +160,9 @@ make reset-2fa                              # показать состояни�
 make rustdesk-info      # адрес, ключ, порты, число подключённых пиров
 ```
 
-Массовая установка — ролью из `~/working/ansible_project` (та же обёртка, что и
-для MeshCentral):
+Массовая установка — ролью из
+[ansible_project](https://github.com/suvorinov/ansible_project)
+(локально `~/working/ansible_project`, та же обёртка, что и для MeshCentral):
 
 ```bash
 cd ~/working/ansible_project
@@ -184,7 +195,7 @@ rustdesk.exe --connect 511788413 --password 'ТвойПароль'
 В OSS-версии совсем без пароля нельзя: hbbs только сводит пиров, пароль
 проверяет сам удалённый хост.
 
-Подробно — `~/working/ansible_project/RUSTDESK_CLIENT.md`.
+Подробно — [RUSTDESK_CLIENT.md](https://github.com/suvorinov/ansible_project/blob/main/RUSTDESK_CLIENT.md).
 
 ## Бэкап и восстановление
 
