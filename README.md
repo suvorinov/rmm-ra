@@ -195,6 +195,26 @@ rustdesk.exe --connect 511788413 --password 'ТвойПароль'
 В OSS-версии совсем без пароля нельзя: hbbs только сводит пиров, пароль
 проверяет сам удалённый хост.
 
+### Адресная книга (HTML)
+
+Чтобы не искать ID по файлам, собери автономную страницу:
+
+```bash
+make rustdesk-book
+# другой каталог отчётов:
+./scripts/rustdesk-book.sh --reports ~/working/ansible_project/reports/rustdesk
+```
+
+Результат — `reports/rustdesk-book.html`: таблица «хост — ID — версия — есть ли
+постоянный пароль», фильтр по IP/ID/версии, переключатель «только без пароля»,
+кликабельные ссылки `rustdesk://connection/new/<ID>` и кнопка «скопировать
+команду» `rustdesk.exe --connect <ID>`. Хосты без постоянного пароля подсвечены,
+их список выводится сверху.
+
+Каталог `reports/` в git не попадает — там внутренние IP и ID. Страница
+собирается из отчётов `deploy_rustdesk.sh`
+(`~/working/ansible_project/reports/rustdesk/*.txt`), пароли в неё не пишутся.
+
 Подробно — [RUSTDESK_CLIENT.md](https://github.com/suvorinov/ansible_project/blob/main/RUSTDESK_CLIENT.md).
 
 ## Бэкап и восстановление

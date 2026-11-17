@@ -12,3 +12,6 @@ backups/
 text.txt
 *.bak-*
 *.old
+
+# Сгенерированные отчёты: внутренние IP и RustDesk ID, не для публичного repo
+reports/

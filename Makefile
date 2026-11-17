@@ -12,7 +12,7 @@ GREEN  = \033[0;32m
 YELLOW = \033[1;33m
 NC     = \033[0m # No Color
 
-.PHONY: help up down restart logs logs-mc logs-rd status pull update clean backup lock-registration mesh-groups pin-cert reset-2fa rustdesk-info rustdesk-key
+.PHONY: help up down restart logs logs-mc logs-rd status pull update clean backup lock-registration mesh-groups pin-cert reset-2fa rustdesk-info rustdesk-book rustdesk-key
 
 help: ## Показать эту справку
 	@echo "$(YELLOW)Доступные команды для управления RMM-RA:$(NC)"
@@ -83,6 +83,9 @@ reset-2fa: ## Аварийный сброс 2FA у админа (потерян 
 
 rustdesk-info: ## Параметры RustDesk для клиентов (адрес, ключ, порты, пиры)
 	@./scripts/rustdesk-info.sh
+
+rustdesk-book: ## HTML-адресная книга из отчётов Ansible (reports/rustdesk-book.html)
+	@./scripts/rustdesk-book.sh
 
 # Полезная команда для RustDesk: показать сгенерированный ключ
 rustdesk-key: ## Показать публичный ключ RustDesk (нужен для настройки клиентов)
