@@ -12,7 +12,7 @@ GREEN  = \033[0;32m
 YELLOW = \033[1;33m
 NC     = \033[0m # No Color
 
-.PHONY: help up down restart logs logs-mc logs-rd status pull update clean backup lock-registration mesh-groups pin-cert reset-2fa rustdesk-info rustdesk-book rustdesk-key
+.PHONY: help up down restart logs logs-mc logs-rd status pull update clean backup lock-registration mesh-groups mesh-doctor pin-cert npm-ws-timeout reset-2fa rustdesk-info rustdesk-book rustdesk-key
 
 help: ## Показать эту справку
 	@echo "$(YELLOW)Доступные команды для управления RMM-RA:$(NC)"
@@ -76,6 +76,12 @@ mesh-groups: ## Показать ID групп устройств MeshCentral (�
 
 pin-cert: ## Пришпилить сертификат NPM в MeshCentral (после смены сертификата)
 	./scripts/pin-npm-cert.sh
+
+npm-ws-timeout: ## Увеличить таймауты WebSocket в NPM (иначе агенты рвутся каждые 90с)
+	./scripts/npm-ws-timeout.sh
+
+mesh-doctor: ## Проверить сертификат, таймауты NPM и состояние устройств
+	@./scripts/mesh-doctor.sh
 
 reset-2fa: ## Аварийный сброс 2FA у админа (потерян телефон и резервные коды)
 	@echo "$(YELLOW)Только показать состояние:$(NC) ./scripts/reset-2fa.sh"

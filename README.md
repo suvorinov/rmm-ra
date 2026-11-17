@@ -83,6 +83,31 @@ make pin-cert
 ./scripts/pin-npm-cert.sh --check
 ```
 
+### WebSocket и таймауты NPM
+
+Вторая причина «пропавших» устройств — дефолтный `proxy_read_timeout 90s`
+в NPM. Агент MeshCentral держит WebSocket и может молчать дольше 90 секунд;
+NPM закрывает соединение, агент переподключается, устройство мигает
+online/offline. В access-логе NPM это видно как `GET /agent.ashx` (101)
+примерно раз в 90 секунд.
+
+Лечится один раз (файл переживает перезапуск NPM и не сбрасывается из UI):
+
+```bash
+make npm-ws-timeout
+```
+
+Скрипт добавляет в `/data/nginx/custom/server_proxy.conf` (NPM подключает его
+в каждый проксируемый `server{}`) `proxy_read_timeout 3600s` и
+`proxy_send_timeout 3600s`, проверяет конфиг через `nginx -t` и перезагружает
+NPM. Уже заданные в этом файле таймауты не перезаписываются.
+
+Проверить состояние обоих пунктов и устройств одной командой:
+
+```bash
+make mesh-doctor
+```
+
 ## Источник истины конфигурации
 
 В `.env` стоит `MC_DYNAMIC_CONFIG=false`, поэтому entrypoint **не** применяет
@@ -243,6 +268,7 @@ make up
 make rustdesk-info  # адрес, ключ, порты и число пиров RustDesk
 make rustdesk-key   # только публичный ключ для настройки клиентов
 make mesh-groups    # ID групп устройств MeshCentral (для установки агентов)
+make mesh-doctor    # проверка сертификата, таймаутов NPM и устройств
 make pull           # скачать свежие образы
 make update         # обновить и перезапустить
 ```
@@ -250,7 +276,16 @@ make update         # обновить и перезапустить
 ## Диагностика
 
 ```bash
+make mesh-doctor         # сертификат, таймауты NPM, состояние устройств
 docker logs meshcentral --tail 100
 docker exec nginx-proxy tail -n 50 /data/logs/proxy-host-3_error.log
+docker exec nginx-proxy tail -f /data/logs/proxy-host-3_access.log
 curl -sk -o /dev/null -w '%{http_code}\n' --resolve rmm.zr.local:443:127.0.0.1 https://rmm.zr.local/
 ```
+
+Если устройства не видны в «Мои устройства»:
+
+- `make mesh-doctor` — покажет рассинхрон `certhash` и таймауты WebSocket;
+- в UI сбрось фильтр устройств на **«Все»** (он запоминается в браузере,
+  и при выбранном «В сети» offline-устройства скрыты);
+- `make mesh-groups` — проверь, что агенты ставятся в нужную группу.
