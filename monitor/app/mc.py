@@ -12,6 +12,7 @@ import logging
 import os
 import shutil
 import subprocess
+import tempfile
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -99,27 +100,36 @@ class MeshCentralClient:
         command = [node, str(meshctrl), *args]
         # В лог — только действие и id, без --run и прочих длинных аргументов.
         log.debug("meshctrl %s", " ".join(args[:3]))
+        # node после вывода большого JSON закрывает stdout раньше, чем родитель
+        # успевает вычитать pipe: capture_output обрезает ответ ровно до 64 KiB.
+        # Пишем в обычные файлы — так обрезки нет ни на хосте, ни в контейнере.
         try:
-            proc = subprocess.run(
-                command,
-                env=self._env(),
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout,
-            )
+            with tempfile.TemporaryFile(
+                mode="w+", encoding="utf-8", errors="replace"
+            ) as stdout_file, tempfile.TemporaryFile(
+                mode="w+", encoding="utf-8", errors="replace"
+            ) as stderr_file:
+                proc = subprocess.run(
+                    command,
+                    env=self._env(),
+                    stdout=stdout_file,
+                    stderr=stderr_file,
+                    timeout=timeout,
+                )
+                stdout_file.seek(0)
+                stderr_file.seek(0)
+                out = stdout_file.read()
+                err = stderr_file.read()
         except FileNotFoundError as exc:
             raise MeshCentralError(f"не найден node/meshctrl: {exc}") from exc
         except subprocess.TimeoutExpired as exc:
             raise MeshCentralError(f"meshctrl не ответил за {timeout} с") from exc
 
         if proc.returncode != 0:
-            detail = proc.stderr.strip() or proc.stdout.strip() or f"exit code {proc.returncode}"
+            detail = err.strip() or out.strip() or f"exit code {proc.returncode}"
             raise MeshCentralError(self._redact(_preview(detail, 500)))
-        out = proc.stdout
         if not out.strip():
-            detail = proc.stderr.strip() or "пустой ответ"
+            detail = err.strip() or "пустой ответ"
             raise MeshCentralError(self._redact(f"meshctrl: {_preview(detail)}"))
         return out
 

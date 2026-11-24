@@ -8,17 +8,26 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import re
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 ROOT = Path(__file__).resolve().parents[2]
 MONITOR_DIR = ROOT / "monitor"
 DEV_DATA = ROOT / "monitor-data-dev"
+NODE_HOSTS_PRELOAD = MONITOR_DIR / "scripts" / "dev-node-hosts.js"
 
 # Эти пути в docker-варианте абсолютные (/data, /opt/meshctrl), локально они
 # не подходят. Значения, заданные снаружи (Makefile/CLI), имеют приоритет.
 LOCAL_PATH_VARS = ("MON_DB_PATH", "MON_HOME", "MON_MESHCTRL")
+
+# В контейнере MeshCentral доступен по имени сервиса, с хоста — нет.
+DOCKER_MC_HOSTS = {"meshcentral"}
+DEFAULT_DEV_MC_HOST = "rmm.zr.local"
+DEFAULT_DEV_MC_IP = "127.0.0.1"
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
@@ -72,6 +81,36 @@ def prepare_local_paths() -> dict[str, str]:
     }
 
 
+def local_meshcentral_url(
+    raw: str, dev_host: str = DEFAULT_DEV_MC_HOST
+) -> tuple[str, str | None]:
+    """Заменяет docker-внутренний адрес MeshCentral на доступный с хоста.
+
+    Возвращает ``(url, dns_name)``; ``dns_name`` не ``None``, если для Node
+    понадобится подмена DNS (см. dev-node-hosts.js). Путь не добавляем:
+    meshctrl сам допишет ``/control.ashx`` к базовому URL.
+    """
+    parts = urlsplit(raw)
+    if (parts.hostname or "").lower() not in DOCKER_MC_HOSTS:
+        return raw, None
+    return urlunsplit(("wss", dev_host, "", parts.query, "")), dev_host
+
+
+def safe_url(url: str) -> str:
+    """Чтобы не светить логин-ключ в консоли."""
+    return re.sub(r"(key=)[^&\s]+", r"\1***", url)
+
+
+def enable_node_hosts(dns_name: str) -> None:
+    """Включаем preload, подменяющий DNS только для дочерних node-процессов."""
+    ip = os.environ.get("MON_DEV_MESH_IP", DEFAULT_DEV_MC_IP) or DEFAULT_DEV_MC_IP
+    os.environ["MON_DEV_DNS_OVERRIDES"] = json.dumps({dns_name: ip})
+    preload = f"--require {NODE_HOSTS_PRELOAD}"
+    current = os.environ.get("NODE_OPTIONS", "")
+    if preload not in current:
+        os.environ["NODE_OPTIONS"] = f"{current} {preload}".strip()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="RMM Monitor: локальный запуск без Docker")
     parser.add_argument("--host", default="0.0.0.0", help="адрес слушателя (по умолчанию 0.0.0.0)")
@@ -107,6 +146,16 @@ def main() -> None:
     if args.no_scheduler:
         os.environ["MON_SCHEDULER_ENABLED"] = "false"
 
+    dev_mesh_host = (
+        os.environ.get("MON_DEV_MESH_HOST", DEFAULT_DEV_MC_HOST) or DEFAULT_DEV_MC_HOST
+    )
+    mc_url, dns_name = local_meshcentral_url(
+        os.environ.get("MON_MC_URL", ""), dev_host=dev_mesh_host
+    )
+    if dns_name:
+        os.environ["MON_MC_URL"] = mc_url
+        enable_node_hosts(dns_name)
+
     sys.path.insert(0, str(MONITOR_DIR))
     import uvicorn  # pylint: disable=import-outside-toplevel
 
@@ -115,6 +164,7 @@ def main() -> None:
         f"Из локальной сети:     http://{args.lan_ip}:{args.port}\n"
         f"Окружение:             {env_file}\n"
         f"База:                  {os.environ['MON_DB_PATH']}\n"
+        f"MeshCentral:           {safe_url(os.environ.get('MON_MC_URL', ''))}\n"
         f"Планировщик:           {os.environ.get('MON_SCHEDULER_ENABLED', 'true')}\n",
         flush=True,
     )

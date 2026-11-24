@@ -227,9 +227,22 @@ make monitor-dev MONITOR_DEV_ARGS="--reload"
    `MON_MESHCTRL` — `monitor/vendor/meshctrl.js`. Данные и вендор в git не
    попадают.
 
+Отдельно про MeshCentral: в `dev.env` можно оставить docker-адрес
+`MON_MC_URL=ws://meshcentral:443`. `dev.py` сам заменит его на
+`wss://rmm.zr.local` и через `NODE_OPTIONS` подключит
+`monitor/scripts/dev-node-hosts.js`, который направляет этот хост на
+`127.0.0.1:443` (локальный NPM). Править `/etc/hosts` не нужно. Если NPM слушает
+на другом адресе — задай `MON_DEV_MESH_IP`, если нужен другой домен —
+`MON_DEV_MESH_HOST`. Задашь свой `MON_MC_URL` — подмена не включается.
+Важно: `meshctrl` сам дописывает `/control.ashx`, поэтому в URL путь указывать
+не надо (иначе получится `/control.ashx/control.ashx` и пустой ответ).
+
 По умолчанию `MONITOR_DEV_ARGS=--no-scheduler`: интерфейс и API работают, но
-MeshCentral не опрашивается (удобно править вёрстку). Убери этот флаг или
-переопредели переменную, если проверяешь живой сбор. Файл окружения выбирается
+MeshCentral не опрашивается (удобно править вёрстку). Для живого сбора убери
+флаг **и** строку `MON_SCHEDULER_ENABLED=false` из `monitor/dev.env`
+(переопределить на разовый запуск можно так:
+`env MON_SCHEDULER_ENABLED=true make monitor-dev MONITOR_DEV_ARGS=`).
+Файл окружения выбирается
 в порядке `monitor/monitor.env` → `monitor/dev.env` →
 `monitor/monitor.env.example`. Для чистого дева можно сделать:
 
