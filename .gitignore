@@ -10,8 +10,11 @@ backups/
 
 # Мониторинг: БД с именами хостов/пользователей и секреты сервиса
 monitor-data/
+monitor-data-dev/
 monitor/monitor.env
+monitor/dev.env
 monitor/.venv/
+monitor/vendor/
 __pycache__/
 *.pyc
 .pytest_cache/

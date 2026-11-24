@@ -5,6 +5,15 @@
 COMPOSE_FILE = docker-compose.yml
 MONITOR_COMPOSE_FILE = docker-compose.monitor.yml
 MONITOR_DATA_DIR = monitor-data
+# Локальная разработка без Docker
+MONITOR_VENV        = monitor/.venv
+MONITOR_VENDOR      = monitor/vendor
+MONITOR_DEV_DATA    = monitor-data-dev
+MONITOR_DEV_HOST    ?= 0.0.0.0
+MONITOR_DEV_PORT    ?= 8000
+MONITOR_DEV_LAN_IP  ?= 192.168.0.9
+MONITOR_DEV_ENV     ?=
+MONITOR_DEV_ARGS    ?= --no-scheduler
 ENV_FILE     = .env
 BACKUP_DIR   = backups
 TZ           ?= Europe/Moscow
@@ -14,7 +23,7 @@ GREEN  = \033[0;32m
 YELLOW = \033[1;33m
 NC     = \033[0m # No Color
 
-.PHONY: help up down restart logs logs-mc logs-rd status pull update clean backup lock-registration mesh-groups mesh-doctor pin-cert npm-ws-timeout reset-2fa rustdesk-info rustdesk-book rustdesk-key monitor-up monitor-down monitor-restart monitor-build monitor-logs monitor-status monitor-health monitor-backup
+.PHONY: help up down restart logs logs-mc logs-rd status pull update clean backup lock-registration mesh-groups mesh-doctor pin-cert npm-ws-timeout reset-2fa rustdesk-info rustdesk-book rustdesk-key monitor-up monitor-down monitor-restart monitor-build monitor-logs monitor-status monitor-health monitor-backup monitor-dev-venv monitor-dev-vendor monitor-dev-vendor-update monitor-dev monitor-dev-test monitor-dev-clean
 
 help: ## Показать эту справку
 	@echo "$(YELLOW)Доступные команды для управления RMM-RA:$(NC)"
@@ -144,3 +153,58 @@ monitor-backup: ## Сделать согласованный бэкап SQLite �
 	docker exec rmm-monitor rm -f /data/.backup.db; \
 	chmod 600 "$(BACKUP_DIR)/monitor-$$STAMP.db"; \
 	echo "$(GREEN)Бэкап: $(BACKUP_DIR)/monitor-$$STAMP.db$(NC)"
+
+# -------------------------------------------------------------- dev без Docker
+
+monitor-dev-venv: ## Подготовить venv для локальной разработки мониторинга
+	@test -x $(MONITOR_VENV)/bin/python || python3 -m venv $(MONITOR_VENV)
+	@$(MONITOR_VENV)/bin/python -c 'import uvicorn, fastapi, sqlalchemy, apscheduler, jinja2, httpx' 2>/dev/null || { \
+		echo "$(YELLOW)Ставлю зависимости в $(MONITOR_VENV)...$(NC)"; \
+		$(MONITOR_VENV)/bin/python -m pip install -q -r monitor/requirements.txt -r monitor/requirements-dev.txt; \
+	}
+	@echo "$(GREEN)venv готов: $(MONITOR_VENV)$(NC)"
+
+monitor-dev-vendor: ## Скопировать meshctrl.js + node_modules из MeshCentral (для запуска без Docker)
+	@mkdir -p $(MONITOR_VENDOR)/node_modules
+	@if [ -f $(MONITOR_VENDOR)/meshctrl.js ] && [ -d $(MONITOR_VENDOR)/node_modules/ws ] && [ -d $(MONITOR_VENDOR)/node_modules/minimist ]; then \
+		echo "$(GREEN)meshctrl уже есть: $(MONITOR_VENDOR)$(NC)"; \
+	elif docker ps --format '{{.Names}}' 2>/dev/null | grep -qx meshcentral; then \
+		echo "$(YELLOW)Копирую meshctrl из контейнера meshcentral...$(NC)"; \
+		docker cp meshcentral:/opt/meshcentral/meshcentral/meshctrl.js $(MONITOR_VENDOR)/meshctrl.js || exit 1; \
+		docker cp meshcentral:/opt/meshcentral/meshcentral/node_modules/minimist $(MONITOR_VENDOR)/node_modules/ || exit 1; \
+		docker cp meshcentral:/opt/meshcentral/meshcentral/node_modules/ws $(MONITOR_VENDOR)/node_modules/ || exit 1; \
+	elif command -v docker >/dev/null 2>&1; then \
+		echo "$(YELLOW)Контейнер не запущен, беру файлы из образа...$(NC)"; \
+		CID=$$(docker create ghcr.io/ylianst/meshcentral:latest) || exit 1; \
+		docker cp $$CID:/opt/meshcentral/meshcentral/meshctrl.js $(MONITOR_VENDOR)/meshctrl.js || exit 1; \
+		docker cp $$CID:/opt/meshcentral/meshcentral/node_modules/minimist $(MONITOR_VENDOR)/node_modules/ || exit 1; \
+		docker cp $$CID:/opt/meshcentral/meshcentral/node_modules/ws $(MONITOR_VENDOR)/node_modules/ || exit 1; \
+		docker rm $$CID >/dev/null; \
+	else \
+		echo "$(YELLOW)Docker недоступен.$(NC)"; \
+		echo "Скопируй вручную с сервера MeshCentral в $(MONITOR_VENDOR)/:"; \
+		echo "  meshctrl.js, node_modules/minimist, node_modules/ws"; \
+		exit 1; \
+	fi
+	@test -f $(MONITOR_VENDOR)/meshctrl.js || { echo "$(YELLOW)meshctrl.js не скопирован$(NC)"; exit 1; }
+
+monitor-dev-vendor-update: ## Обновить локальный meshctrl.js из свежего образа MeshCentral
+	@rm -rf $(MONITOR_VENDOR)
+	@$(MAKE) monitor-dev-vendor
+
+monitor-dev: monitor-dev-venv monitor-dev-vendor ## Запустить мониторинг без Docker (0.0.0.0:8000, сеть 192.168.0.9)
+	@install -d -m 700 $(MONITOR_DEV_DATA)
+	@echo "$(YELLOW)Локально: http://127.0.0.1:$(MONITOR_DEV_PORT) | по сети: http://$(MONITOR_DEV_LAN_IP):$(MONITOR_DEV_PORT)$(NC)"
+	@MON_MESHCTRL="$(CURDIR)/$(MONITOR_VENDOR)/meshctrl.js" \
+	 MON_DB_PATH="$(CURDIR)/$(MONITOR_DEV_DATA)/monitor.db" \
+	 MON_HOME="$(CURDIR)/$(MONITOR_DEV_DATA)/home" \
+	 $(MONITOR_VENV)/bin/python monitor/scripts/dev.py \
+	   --host $(MONITOR_DEV_HOST) --port $(MONITOR_DEV_PORT) --lan-ip $(MONITOR_DEV_LAN_IP) \
+	   $(if $(MONITOR_DEV_ENV),--env-file $(MONITOR_DEV_ENV),) $(MONITOR_DEV_ARGS)
+
+monitor-dev-test: monitor-dev-venv ## Прогнать pytest локально (без Docker)
+	@$(MONITOR_VENV)/bin/python -m pytest -q monitor/tests
+
+monitor-dev-clean: ## Удалить локальные данные разработки (БД и логи), venv оставить
+	@rm -rf $(MONITOR_DEV_DATA)
+	@echo "$(GREEN)Локальные данные удалены: $(MONITOR_DEV_DATA)$(NC)"

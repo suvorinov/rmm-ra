@@ -172,9 +172,12 @@ make monitor-backup   # SQLite отдельно от общего бэкапа
 ```
 
 В NPM нужно создать Proxy Host `mon.zr.local` → `http://monitor:8000`
-(Websockets off, SSL от того же внутреннего УЦ). Подробно — [MONITORING.md](MONITORING.md):
-учётка MeshCentral, переменные, API, приватность, диагностика и ограничения.
-Секреты (`monitor/monitor.env`) и БД (`monitor-data/`) в git не попадают.
+(Websockets off, SSL от того же внутреннего УЦ). Для разработки без Docker —
+`make monitor-dev`, сервис слушает `0.0.0.0:8000` и доступен по
+`http://192.168.0.9:8000`. Подробно — [MONITORING.md](MONITORING.md):
+учётка MeshCentral, переменные, API, приватность, локальный запуск и диагностика.
+Секреты (`monitor/monitor.env`, `monitor/dev.env`) и БД (`monitor-data/`,
+`monitor-data-dev/`) в git не попадают.
 
 ## 2FA для администратора
 
@@ -304,6 +307,8 @@ make mesh-doctor    # проверка сертификата, таймауто�
 make monitor-build  # пересобрать образ мониторинга
 make monitor-up     # поднять мониторинг (нужен monitor/monitor.env)
 make monitor-health # healthz контейнера rmm-monitor
+make monitor-dev    # запустить без Docker: http://192.168.0.9:8000
+make monitor-dev-test  # pytest локально, без контейнера
 make pull           # скачать свежие образы
 make update         # обновить и перезапустить
 ```

@@ -200,13 +200,57 @@ make monitor-backup    # ./backups/monitor-YYYYmmdd-HHMMSS.db, chmod 600
 Основной `make backup` архивирует только стек RMM; БД мониторинга добавляется
 отдельно, чтобы не тащить PII в общий архив.
 
-## Разработка
+## Разработка без Docker
+
+Мониторинг можно поднять прямо на хосте (Python 3.12 + Node на хосте), без
+контейнера. Приложение слушает `0.0.0.0`, поэтому доступно из локальной сети:
 
 ```bash
-cd monitor
-python3 -m venv /tmp/monitor-venv
-/tmp/monitor-venv/bin/pip install -r requirements.txt -r requirements-dev.txt
-/tmp/monitor-venv/bin/python -m pytest -q
+make monitor-dev                  # 0.0.0.0:8000, подсказка: http://192.168.0.9:8000
+# другой порт / другой адрес сети:
+make monitor-dev MONITOR_DEV_PORT=8080 MONITOR_DEV_LAN_IP=192.168.0.50
+# с автоперезагрузкой и живым опросом MeshCentral:
+make monitor-dev MONITOR_DEV_ARGS="--reload"
 ```
 
-Тесты не требуют Node, MeshCentral и Windows: всё закрыто фейковым клиентом.
+Что делает цель:
+
+1. `monitor-dev-venv` — создаёт `monitor/.venv` и ставит оттуда
+   `requirements.txt` + `requirements-dev.txt`.
+2. `monitor-dev-vendor` — один раз копирует `meshctrl.js`, `minimist` и `ws`
+   из запущенного контейнера `meshcentral` (или из образа) в
+   `monitor/vendor/`. Сам запуск уже **не использует Docker**; если Docker
+   недоступен, положи эти файлы вручную по тем же путям. Обновить —
+   `make monitor-dev-vendor-update`.
+3. Поднимает `uvicorn` через `monitor/scripts/dev.py` с локальными путями:
+   БД — `monitor-data-dev/monitor.db`, HOME — `monitor-data-dev/home`,
+   `MON_MESHCTRL` — `monitor/vendor/meshctrl.js`. Данные и вендор в git не
+   попадают.
+
+По умолчанию `MONITOR_DEV_ARGS=--no-scheduler`: интерфейс и API работают, но
+MeshCentral не опрашивается (удобно править вёрстку). Убери этот флаг или
+переопредели переменную, если проверяешь живой сбор. Файл окружения выбирается
+в порядке `monitor/monitor.env` → `monitor/dev.env` →
+`monitor/monitor.env.example`. Для чистого дева можно сделать:
+
+```bash
+cp monitor/dev.env.example monitor/dev.env   # dev-логин/пароль, планировщик off
+```
+
+Файл `monitor/dev.env` в git не попадает. Если есть `monitor/monitor.env`
+с боевыми секретами, он имеет приоритет — не публикуй `http://192.168.0.9:8000`
+во внешнюю сеть и помни, что Basic тут идёт по **обычному HTTP** (TLS в
+dev-режиме нет).
+Для доступа с другой машины поднимай хост только в доверенной сети либо
+закрывай порт фаерволом.
+
+Остановка — `Ctrl+C` в терминале. Локальную БД можно сбросить командой
+`make monitor-dev-clean`.
+
+Тесты (без Node, MeshCentral и Windows — всё на фейковом клиенте):
+
+```bash
+make monitor-dev-test
+# или в уже созданном venv:
+monitor/.venv/bin/python -m pytest -q monitor/tests
+```
