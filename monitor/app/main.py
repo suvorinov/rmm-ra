@@ -164,7 +164,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.middleware("http")
     async def guard(request: Request, call_next):
         path = request.url.path
-        if path in {"/healthz", "/health"} or path.startswith("/static/"):
+        # /agent/snapshot.ps1 доступен без Basic: агент MeshCentral не умеет
+        # авторизоваться, а сам скрипт не содержит секретов.
+        if path in {"/healthz", "/health", "/agent/snapshot.ps1"} or path.startswith(
+            "/static/"
+        ):
             return _secure(await call_next(request))
 
         if settings.auth_enabled:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 
@@ -52,6 +53,9 @@ class Settings:
     meshctrl_path: Path = Path("/opt/meshctrl/meshctrl.js")
     node_bin: str = "node"
     home_dir: Path = Path("/tmp/monitor-home")
+    # Адрес, по которому агенты MeshCentral сами тянут snapshot.ps1.
+    # Пусто = классический путь через meshctrl upload.
+    agent_script_url: str = ""
 
     # Расписание
     scheduler_enabled: bool = True
@@ -89,6 +93,7 @@ class Settings:
             meshctrl_path=Path(_env("MON_MESHCTRL", "/opt/meshctrl/meshctrl.js")),
             node_bin=_env("MON_NODE_BIN", "node") or "node",
             home_dir=Path(_env("MON_HOME", "/tmp/monitor-home")),
+            agent_script_url=_env("MON_AGENT_SCRIPT_URL").rstrip("/"),
             scheduler_enabled=_env_bool("MON_SCHEDULER_ENABLED", True),
             inventory_interval=_env_int("MON_INVENTORY_INTERVAL", 60, minimum=15),
             snapshot_interval=_env_int("MON_SNAPSHOT_INTERVAL", 300, minimum=30),
@@ -132,6 +137,14 @@ class Settings:
                 "Не заданы учётные данные MeshCentral: нужен MON_MC_USER и MON_MC_PASS "
                 "(либо логин-ключ в MON_MC_URL вида ws://meshcentral:443?key=...)"
             )
+        if self.agent_script_url:
+            parsed = urlparse(self.agent_script_url)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise ValueError(
+                    "MON_AGENT_SCRIPT_URL: нужен полный адрес вида http://192.168.0.9:8000"
+                )
+            if "'" in self.agent_script_url or '"' in self.agent_script_url:
+                raise ValueError("MON_AGENT_SCRIPT_URL: кавычки в адресе не допускаются")
 
     @property
     def auth_enabled(self) -> bool:
@@ -148,6 +161,7 @@ class Settings:
             "tz": self.tz,
             "mc_url": redact(self.mc_url),
             "mc_user": self.mc_user,
+            "agent_script_url": self.agent_script_url or "off (meshctrl upload)",
             "inventory_interval": self.inventory_interval,
             "snapshot_interval": self.snapshot_interval,
             "snapshot_concurrency": self.snapshot_concurrency,

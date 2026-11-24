@@ -166,8 +166,13 @@ class MeshCentralClient:
         local_path: Path,
         remote_dir: str,
         timeout: int | None = None,
+        remote_name: str | None = None,
     ) -> str:
-        """Кладёт файл на хост. Возвращает полный удалённый путь."""
+        """Кладёт файл на хост. Возвращает полный удалённый путь.
+
+        ``remote_name`` нужен, когда локальный файл уникален на каждую загрузку,
+        а на хосте имя должно быть стабильным (кэш по SHA).
+        """
         local_path = Path(local_path)
         with self._sem:
             output = self._run(
@@ -184,7 +189,7 @@ class MeshCentralClient:
             )
         if "Upload done" not in output:
             raise MeshCentralError(self._redact(f"загрузка не подтверждена: {_preview(output)}"))
-        return remote_dir.rstrip("\\/") + "\\" + local_path.name
+        return remote_dir.rstrip("\\/") + "\\" + (remote_name or local_path.name)
 
     # ----------------------------------------------------------------- health
 

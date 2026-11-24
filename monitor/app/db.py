@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -40,6 +40,15 @@ class Database:
 
     def init(self) -> None:
         Base.metadata.create_all(self.engine)
+        # Если процесс убили посреди снимка, задача оставалась «running»
+        # навсегда. При старте помечаем такие строки как прерванные.
+        with self.session() as session:
+            session.execute(
+                text(
+                    "UPDATE job_runs SET status='interrupted', finished_at=started_at, "
+                    "message='прервано перезапуском сервиса' WHERE status='running'"
+                )
+            )
         # База содержит имена хостов и пользователей — только владельцу.
         # WAL и SHM — тоже база, закрываем их так же.
         for suffix in ("", "-wal", "-shm"):

@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -96,6 +97,29 @@ def local_meshcentral_url(
     return urlunsplit(("wss", dev_host, "", parts.query, "")), dev_host
 
 
+def detect_meshcentral_ip() -> str | None:
+    """IP запущенного контейнера meshcentral (только read-only docker inspect)."""
+    try:
+        proc = subprocess.run(
+            [
+                "docker",
+                "inspect",
+                "meshcentral",
+                "--format",
+                "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    addresses = [item for item in proc.stdout.split() if item]
+    return addresses[0] if addresses else None
+
+
 def safe_url(url: str) -> str:
     """Чтобы не светить логин-ключ в консоли."""
     return re.sub(r"(key=)[^&\s]+", r"\1***", url)
@@ -146,15 +170,43 @@ def main() -> None:
     if args.no_scheduler:
         os.environ["MON_SCHEDULER_ENABLED"] = "false"
 
+    # Агенты должны уметь достучаться до мониторинга по LAN. По умолчанию
+    # это тот же адрес, который печатается в шапке dev-запуска.
+    if not os.environ.get("MON_AGENT_SCRIPT_URL"):
+        os.environ["MON_AGENT_SCRIPT_URL"] = f"http://{args.lan_ip}:{args.port}"
+
     dev_mesh_host = (
         os.environ.get("MON_DEV_MESH_HOST", DEFAULT_DEV_MC_HOST) or DEFAULT_DEV_MC_HOST
     )
-    mc_url, dns_name = local_meshcentral_url(
-        os.environ.get("MON_MC_URL", ""), dev_host=dev_mesh_host
-    )
+    raw_mc_url = os.environ.get("MON_MC_URL", "")
+    mc_url, dns_name = local_meshcentral_url(raw_mc_url, dev_host=dev_mesh_host)
+    mc_mode = (os.environ.get("MON_DEV_MC_MODE", "auto") or "auto").lower()
+    mc_label = ""
     if dns_name:
-        os.environ["MON_MC_URL"] = mc_url
-        enable_node_hosts(dns_name)
+        # NPM нормально пропускает текстовые run_command, но бинарные кадры
+        # tunnel/upload через него до хоста не доходят. Поэтому предпочитаем
+        # прямой ws:// к контейнеру, если он запущен.
+        if mc_mode in {"auto", "direct"}:
+            container_ip = detect_meshcentral_ip()
+            if container_ip:
+                query = urlsplit(raw_mc_url).query
+                mc_url = urlunsplit(("ws", f"{container_ip}:443", "", query, ""))
+                dns_name = None
+                mc_label = f"прямо к контейнеру ({container_ip})"
+        if dns_name:
+            os.environ["MON_MC_URL"] = mc_url
+            enable_node_hosts(dns_name)
+            mc_label = "через NPM (загрузка файлов может не работать)"
+            if mc_mode == "auto":
+                print(
+                    "ВНИМАНИЕ: контейнер meshcentral не найден, подключаюсь через NPM; "
+                    "для снимков нужен прямой ws:// к контейнеру",
+                    flush=True,
+                )
+        else:
+            os.environ["MON_MC_URL"] = mc_url
+    else:
+        mc_label = "свой MON_MC_URL"
 
     sys.path.insert(0, str(MONITOR_DIR))
     import uvicorn  # pylint: disable=import-outside-toplevel
@@ -164,7 +216,8 @@ def main() -> None:
         f"Из локальной сети:     http://{args.lan_ip}:{args.port}\n"
         f"Окружение:             {env_file}\n"
         f"База:                  {os.environ['MON_DB_PATH']}\n"
-        f"MeshCentral:           {safe_url(os.environ.get('MON_MC_URL', ''))}\n"
+        f"MeshCentral:           {safe_url(os.environ.get('MON_MC_URL', ''))} ({mc_label})\n"
+        f"Скрипт для агентов:    {os.environ.get('MON_AGENT_SCRIPT_URL', '')}\n"
         f"Планировщик:           {os.environ.get('MON_SCHEDULER_ENABLED', 'true')}\n",
         flush=True,
     )

@@ -122,6 +122,15 @@ def test_cross_origin_post_is_rejected(settings, db):
         assert response.status_code == 403
 
 
+def test_agent_script_is_public(settings, db):
+    app = create_app(make_auth_settings(settings))
+    with TestClient(app) as client:
+        response = client.get("/agent/snapshot.ps1")
+        assert response.status_code == 200
+        assert "###SNAPSHOT-BEGIN###" in response.text
+        assert response.headers["cache-control"] == "no-cache"
+
+
 def test_health_alias_is_public(settings, db):
     app = create_app(make_auth_settings(settings))
     with TestClient(app) as client:

@@ -91,8 +91,8 @@ class FakeClient:
     def run_powershell(self, node_id, script, timeout=None):
         return self.run_command(node_id, script, timeout=timeout)
 
-    def upload_file(self, node_id, local_path, remote_dir, timeout=None):
-        name = Path(local_path).name
+    def upload_file(self, node_id, local_path, remote_dir, timeout=None, remote_name=None):
+        name = remote_name or Path(local_path).name
         self.uploads.append((node_id, name))
         return remote_dir.rstrip("\\/") + "\\" + name
 
@@ -111,6 +111,7 @@ def settings(tmp_path: Path) -> Settings:
         mc_pass="s3cret-pass",
         meshctrl_path=tmp_path / "meshctrl.js",
         home_dir=tmp_path / "home",
+        agent_script_url="",
         scheduler_enabled=False,
         inventory_interval=60,
         snapshot_interval=300,

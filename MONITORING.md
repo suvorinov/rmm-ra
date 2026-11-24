@@ -70,6 +70,7 @@ $EDITOR monitor/monitor.env     # MON_MC_USER / MON_MC_PASS / MON_AUTH_PASS
 | `MON_MC_URL` | `ws://meshcentral:443` | WebSocket MeshCentral внутри docker-сети (HTTP, `tlsOffload`) |
 | `MON_MC_USER` / `MON_MC_PASS` | — | сервисный аккаунт MeshCentral |
 | `MON_MC_TOKEN` | — | 2FA-токен, если он реально нужен |
+| `MON_AGENT_SCRIPT_URL` | — | адрес, по которому агенты тянут `snapshot.ps1`; пусто = `meshctrl upload` |
 | `MON_AUTH_USER` / `MON_AUTH_PASS` | — | HTTP Basic для веб-интерфейса |
 | `MON_ALLOW_ANONYMOUS` | `false` | только для локальной отладки |
 | `MON_INVENTORY_INTERVAL` | `60` | инвентаризация, сек |
@@ -113,6 +114,14 @@ make monitor-logs        # логи (Ctrl+C)
 сервис отдаёт обычный HTTP. `proxy_read_timeout 3600s` из
 `make npm-ws-timeout` ему не мешает.
 
+Для самих агентов задай `MON_AGENT_SCRIPT_URL` в `monitor.env` — адрес,
+доступный Windows-хостам. Два рабочих варианта: `http://192.168.0.9:8000`
+(порт опубликован в доверенной LAN) либо `https://mon.zr.local` с тем же
+внутренним УЦ, установленным на хостах. Не отключай проверку TLS у агента:
+скрипт выполняется от SYSTEM, и подмена по пути даст произвольный код. Если на
+NPM включён Access List, путь `/agent/snapshot.ps1` должен быть доступен агенту
+без дополнительной авторизации.
+
 Проверка:
 
 ```bash
@@ -152,6 +161,15 @@ JSON API (тоже под Basic): `/api/summary`, `/api/hosts`, `/api/hosts/<id>
 свежего снимка (>80% интервала), с ограничением параллелизма. Результат пишется
 в `job_runs`, а ошибка — в `hosts.last_snapshot_error`.
 
+Скрипт снимка доставляется одним коротким `run_command`: агент сам скачивает
+`/agent/snapshot.ps1` с адреса `MON_AGENT_SCRIPT_URL` (в dev подставляется
+`http://<lan-ip>:8000`) и выполняет его. Причина простая: `meshctrl upload`
+передаёт бинарные кадры, и с хоста они до агента **не доходят** (хотя CLI
+печатает «Upload done»). Старый путь через загрузку файла остался запасным —
+включается, если HTTP-доставка не сработала. Эндпоинт `/agent/snapshot.ps1`
+открыт без Basic: агент не умеет авторизоваться, а сам скрипт секретов не
+содержит.
+
 ## Приватность и доступ
 
 - В БД хранятся имена хостов, IP, имена пользователей Windows и процессы —
@@ -186,9 +204,10 @@ docker exec -e MESHCTRL_URL=ws://meshcentral:443 -e MESHCTRL_LOGINUSER=svc-monit
 | `healthz.meshctrl: false` | в образе не нашёлся `meshctrl.js` или `node`; пересобери `make monitor-build` |
 | инвентарь в ошибке `Invalid login` | неверный `MON_MC_USER/MON_MC_PASS` или у аккаунта 2FA (нужен `MON_MC_TOKEN`) |
 | `ListDevices` пустой | у сервисного аккаунта нет прав на группы устройств |
-| снимки `Access denied` | аккаунту не разрешён `RunCommand`/`Upload` на этих устройствах |
+| снимки `Access denied` | аккаунту не разрешён `RunCommand` на этих устройствах |
+| снимки в ошибке `Unable to connect to remote server` | агент не видит `MON_AGENT_SCRIPT_URL`: проверь IP/порт и файрвол между хостом и мониторингом |
 | хосты «устарели» | агент офлайн (`make mesh-doctor`), либо NPM закрыл WebSocket |
-| `Upload error.` в логах | нет прав на `C:\Windows\Temp` или агент не поддерживает файловую передачу |
+| `Upload error.` в логах | запасной путь: нет прав на `C:\Windows\Temp` или агент не поддерживает файловую передачу |
 | `не разобрал JSON от meshctrl` | строка из meshctrl не массив — проверь, что `--json` не отпал при обновлении CLI |
 
 ## Бэкап
@@ -228,13 +247,15 @@ make monitor-dev MONITOR_DEV_ARGS="--reload"
    попадают.
 
 Отдельно про MeshCentral: в `dev.env` можно оставить docker-адрес
-`MON_MC_URL=ws://meshcentral:443`. `dev.py` сам заменит его на
-`wss://rmm.zr.local` и через `NODE_OPTIONS` подключит
-`monitor/scripts/dev-node-hosts.js`, который направляет этот хост на
-`127.0.0.1:443` (локальный NPM). Править `/etc/hosts` не нужно. Если NPM слушает
-на другом адресе — задай `MON_DEV_MESH_IP`, если нужен другой домен —
-`MON_DEV_MESH_HOST`. Задашь свой `MON_MC_URL` — подмена не включается.
-Важно: `meshctrl` сам дописывает `/control.ashx`, поэтому в URL путь указывать
+`MON_MC_URL=ws://meshcentral:443`. `dev.py` сам определит IP запущенного
+контейнера (read-only `docker inspect`) и подключится напрямую по
+`ws://<ip>:443`. Снимки теперь не зависят от бинарных кадров `meshctrl upload`:
+агент тянет скрипт по HTTP с `http://<lan-ip>:8000`, поэтому прямой доступ к
+контейнеру нужен только для самой WebSocket-команды. Если контейнер не запущен,
+остаётся запасной путь `wss://rmm.zr.local` через локальный NPM с подменой DNS
+(`monitor/scripts/dev-node-hosts.js`). Режим выбирается переменной
+`MON_DEV_MC_MODE=auto|direct|npm`. Свой `MON_MC_URL` подмена не трогает.
+Важно: `meshctrl` сам дописывает `/control.ashx`, поэтому путь в URL указывать
 не надо (иначе получится `/control.ashx/control.ashx` и пустой ответ).
 
 По умолчанию `MONITOR_DEV_ARGS=--no-scheduler`: интерфейс и API работают, но

@@ -79,17 +79,19 @@ try {
         $l = [string]$known[$k]
         if ($k -eq 'browser') { try { if ([string]$p.Path -notmatch '(?i)yandex') { $l = 'browser' } } catch { } }
         if (-not $bm.ContainsKey($l)) { $bm[$l] = [pscustomobject]@{ name = $l; processes = 0; memory_mb = 0.0; users = @() } }
-        $e = $bm[$l]; $e.processes = [int]$e.processes + 1; $bp++
-        try { $e.memory_mb = [double]$e.memory_mb + ([double]$p.WorkingSet64 / 1MB) } catch { }
-        try { if ($p.UserName -and (@($e.users) -notcontains [string]$p.UserName)) { $e.users = @(@($e.users) + [string]$p.UserName) } } catch { }
+        # Не $e: он совпадает с маркером $E (регистронезависимость PowerShell).
+        $entry = $bm[$l]; $entry.processes = [int]$entry.processes + 1; $bp++
+        try { $entry.memory_mb = [double]$entry.memory_mb + ([double]$p.WorkingSet64 / 1MB) } catch { }
+        try { if ($p.UserName -and (@($entry.users) -notcontains [string]$p.UserName)) { $entry.users = @(@($entry.users) + [string]$p.UserName) } } catch { }
     }
     $br = @()
-    foreach ($e in $bm.Values) { $e.memory_mb = [math]::Round([double]$e.memory_mb, 1); $br += $e }
+    foreach ($entry in $bm.Values) { $entry.memory_mb = [math]::Round([double]$entry.memory_mb, 1); $br += $entry }
     $br = @($br | Sort-Object -Property processes -Descending)
 
-    $top = @()
+    # В PowerShell переменные регистронезависимые: $top перетирал бы параметр $Top.
+    $topProcs = @()
     try {
-        $top = @($procs | Group-Object Name | ForEach-Object {
+        $topProcs = @($procs | Group-Object Name | ForEach-Object {
             $m = 0.0; $c = 0.0
             foreach ($x in $_.Group) {
                 try { $m += [double]$x.WorkingSet64 } catch { }
@@ -97,7 +99,7 @@ try {
             }
             [pscustomobject]@{ name = [string]$_.Name; count = [int]$_.Count; ws_mb = [math]::Round($m / 1MB, 1); cpu_s = [math]::Round($c, 1) }
         } | Sort-Object -Property ws_mb -Descending | Select-Object -First ([math]::Max(1, $Top)))
-    } catch { $top = @() }
+    } catch { $topProcs = @() }
 
     $snap = [pscustomobject]@{
         format = 1
@@ -117,7 +119,7 @@ try {
         users = @($users)
         console_user = if ($cs) { [string]$cs.UserName } else { '' }
         browsers = @($br)
-        processes = [pscustomobject]@{ total = [int]$procs.Count; top = @($top) }
+        processes = [pscustomobject]@{ total = [int]$procs.Count; top = @($topProcs) }
         browser_processes = $bp
     }
 } catch {

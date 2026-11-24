@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import hashlib
+import re
 import tempfile
 import threading
 import time
@@ -79,7 +80,7 @@ def _snapshot_source() -> tuple[str, str]:
 
 
 def snapshot_script() -> str:
-    """Текст PowerShell-скрипта (загружается на хост один раз)."""
+    """Текст PowerShell-скрипта (агент тянет его по HTTP или он загружается)."""
     return _snapshot_source()[0]
 
 
@@ -506,6 +507,9 @@ def _looks_like_missing_script(text: str) -> bool:
         "no such file",
         "не удается найти",
         "не найден",
+        # Скрипт на хосте может быть старым/пустым: маркеров в выводе нет,
+        # хотя run_command отработал нормально. Тоже пробуем залить заново.
+        "нет маркера снимка",
     )
     return any(marker in low for marker in markers)
 
@@ -514,14 +518,20 @@ def _upload_snapshot_script(
     ctx: CollectorContext, host_id: str, text: str, sha: str
 ) -> str:
     name = f"rmm-monitor-snapshot-{sha[:12]}.ps1"
-    local = Path(tempfile.gettempdir()) / name
-    local.write_text(text, encoding="utf-8")
+    # Параллельные снимки используют один и тот же скрипт. Если все они пишут
+    # в /tmp/<name>, один поток удаляет файл, пока meshctrl другого ещё читает
+    # его (ENOENT). Локальный файл делаем уникальным, удалённое имя — стабильным.
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", prefix=f"rmm-monitor-{sha[:12]}-", suffix=".ps1", delete=False
+    ) as handle:
+        handle.write(text)
+        local = Path(handle.name)
     try:
         try:
             local.chmod(0o600)
         except OSError:
             pass
-        remote = ctx.client.upload_file(host_id, local, REMOTE_SCRIPT_DIR)
+        remote = ctx.client.upload_file(host_id, local, REMOTE_SCRIPT_DIR, remote_name=name)
     finally:
         local.unlink(missing_ok=True)
     with ctx.db.session() as session:
@@ -539,13 +549,67 @@ def _snapshot_command(remote: str, top: int) -> str:
     )
 
 
-def _collect_snapshot(ctx: CollectorContext, host_id: str, remote: str) -> dict[str, Any]:
+def agent_fetch_command(base_url: str, top: int, sha: str) -> str:
+    """Команда агенту: скачать snapshot.ps1, сверить SHA256 и выполнить.
+
+    Один короткий run_command вместо загрузки 7 КБ бинарными кадрами meshctrl:
+    эти кадры с хоста до агента не доходят. Эндпоинт скрипта открыт без Basic,
+    поэтому хэш защищает выполнение от подмены по пути (агент работает как SYSTEM).
+    """
+    url = base_url.rstrip("/") + "/agent/snapshot.ps1"
+    if any(ch in url for ch in ("'", '"', "\n", "\r")):
+        raise SnapshotError("MON_AGENT_SCRIPT_URL содержит недопустимые символы")
+    if not re.fullmatch(r"[0-9a-f]{64}", sha):
+        raise SnapshotError("некорректный SHA256 скрипта снимка")
+    # Скачиваем байты, а не строку: WebClient.DownloadString на Russian Windows
+    # игнорирует charset и портит кириллицу, из-за чего хэш не сходится.
+    return (
+        "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass "
+        "-Command \"$w=New-Object Net.WebClient; $b=$w.DownloadData('"
+        + url
+        + "'); $h=[BitConverter]::ToString([Security.Cryptography.SHA256]"
+        + "::Create().ComputeHash($b)).Replace('-','').ToLowerInvariant(); "
+        + "if ($h -ne '"
+        + sha
+        + "') { throw 'snapshot.ps1 hash mismatch' }; "
+        + "$s=[Text.Encoding]::UTF8.GetString($b); "
+        + "& ([ScriptBlock]::Create($s)) "
+        + str(max(1, int(top)))
+        + "\""
+    )
+
+
+def _collect_snapshot(ctx: CollectorContext, host_id: str, command: str) -> dict[str, Any]:
     output = ctx.client.run_command(
         host_id,
-        _snapshot_command(remote, ctx.settings.snapshot_top_processes),
+        command,
         timeout=ctx.settings.snapshot_timeout,
     )
     return parse_snapshot_output(output)
+
+
+def _run_uploaded_snapshot(
+    ctx: CollectorContext, host_id: str, text: str, sha: str, cached: bool
+) -> dict[str, Any]:
+    """Старый путь: залить скрипт через meshctrl и запустить локальный файл."""
+    remote = remote_script_path(sha)
+    if not cached:
+        remote = _upload_snapshot_script(ctx, host_id, text, sha)
+    try:
+        return _collect_snapshot(
+            ctx, host_id, _snapshot_command(remote, ctx.settings.snapshot_top_processes)
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Temp могли почистить или залить пустой файл — перезаливаем
+        # один раз даже если SHA помечен как кэшированный.
+        if _looks_like_missing_script(str(exc)):
+            remote = _upload_snapshot_script(ctx, host_id, text, sha)
+            return _collect_snapshot(
+                ctx,
+                host_id,
+                _snapshot_command(remote, ctx.settings.snapshot_top_processes),
+            )
+        raise
 
 
 def snapshot_host(
@@ -577,18 +641,24 @@ def snapshot_host(
             cached = bool(host and host.snapshot_script_sha == sha)
 
         try:
-            remote = remote_script_path(sha)
-            if not cached:
-                remote = _upload_snapshot_script(ctx, host_id, text, sha)
-            try:
-                raw = _collect_snapshot(ctx, host_id, remote)
-            except Exception as exc:  # noqa: BLE001
-                # Temp могли почистить — один раз перезаливаем скрипт и повторяем.
-                if cached and _looks_like_missing_script(str(exc)):
-                    remote = _upload_snapshot_script(ctx, host_id, text, sha)
-                    raw = _collect_snapshot(ctx, host_id, remote)
-                else:
-                    raise
+            base_url = ctx.settings.agent_script_url.rstrip("/")
+            if base_url:
+                command = agent_fetch_command(
+                    base_url, ctx.settings.snapshot_top_processes, sha
+                )
+                try:
+                    raw = _collect_snapshot(ctx, host_id, command)
+                except Exception as exc:  # noqa: BLE001
+                    # Агент не смог достучаться до мониторинга: один раз
+                    # откатываемся на классическую загрузку через meshctrl.
+                    try:
+                        raw = _run_uploaded_snapshot(ctx, host_id, text, sha, cached)
+                    except Exception as upload_exc:  # noqa: BLE001
+                        raise SnapshotError(
+                            f"по HTTP: {exc}; через upload: {upload_exc}"
+                        ) from upload_exc
+            else:
+                raw = _run_uploaded_snapshot(ctx, host_id, text, sha, cached)
             data = normalise_snapshot(raw, now)
         except Exception as exc:  # noqa: BLE001 - фиксируем ошибку на хосте
             message = redact(

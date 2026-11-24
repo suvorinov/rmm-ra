@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from scripts import dev
 from scripts.dev import local_meshcentral_url, parse_env_file, safe_url
 
 
@@ -34,3 +35,12 @@ def test_docker_meshcentral_url_is_rewritten():
 
 def test_safe_url_hides_login_key():
     assert safe_url("wss://rmm.zr.local?key=topsecret") == "wss://rmm.zr.local?key=***"
+
+
+def test_detect_meshcentral_ip(monkeypatch):
+    class Result:
+        returncode = 0
+        stdout = "172.22.0.3 \n"
+
+    monkeypatch.setattr(dev.subprocess, "run", lambda *args, **kwargs: Result())
+    assert dev.detect_meshcentral_ip() == "172.22.0.3"

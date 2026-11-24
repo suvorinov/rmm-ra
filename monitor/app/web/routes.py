@@ -5,10 +5,16 @@ from __future__ import annotations
 import threading
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from sqlalchemy import desc, func, select, text
 
-from ..collector import latest_snapshot, recent_snapshots, run_inventory, snapshot_host
+from ..collector import (
+    latest_snapshot,
+    recent_snapshots,
+    run_inventory,
+    snapshot_host,
+    snapshot_script,
+)
 from ..models import BrowserSession, Host, JobRun, ProcessSnapshot, Snapshot
 from ..timeutil import iso_utc, stale_cutoff, utcnow
 from .charts import sparkline
@@ -345,6 +351,19 @@ def api_snapshots(request: Request, host_id: str) -> JSONResponse:
                 for s in rows
             ],
         }
+    )
+
+
+@router.get("/agent/snapshot.ps1")
+def agent_snapshot_script() -> PlainTextResponse:
+    """Скрипт для агентов MeshCentral: секретов нет, Basic здесь не нужен.
+
+    Агент подтягивает его по LAN и запускает через run_command. Так мы обходим
+    meshctrl upload, который с хоста ненадёжно передаёт бинарные кадры.
+    """
+    return PlainTextResponse(
+        snapshot_script(),
+        headers={"Cache-Control": "no-cache"},
     )
 
 

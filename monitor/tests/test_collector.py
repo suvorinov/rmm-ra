@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 from sqlalchemy import select
 
 from app.collector import (
+    CollectorContext,
     SnapshotError,
+    agent_fetch_command,
     normalise_snapshot,
     parse_snapshot_output,
     remote_script_path,
@@ -192,6 +196,41 @@ def test_snapshot_uses_uploaded_script(ctx, client):
         assert host.snapshot_script_sha == snapshot_script_sha()
     assert client.uploads[0][1] == f"rmm-monitor-snapshot-{snapshot_script_sha()[:12]}.ps1"
     assert remote_script_path(snapshot_script_sha()).startswith("C:\\Windows\\Temp\\")
+
+
+def test_agent_fetch_command_is_short_and_safe():
+    command = agent_fetch_command("http://192.168.0.9:8000/", 25, snapshot_script_sha())
+    assert len(command) < 600
+    assert "http://192.168.0.9:8000/agent/snapshot.ps1" in command
+    assert snapshot_script_sha() in command
+    assert command.endswith('25"')
+
+
+def test_snapshot_uses_http_when_configured(ctx, client, settings):
+    http_settings = replace(settings, agent_script_url="http://mon.local:8000")
+    http_ctx = CollectorContext(settings=http_settings, db=ctx.db, client=client)
+    upsert_hosts(ctx.db, [dict(DEVICE)], utcnow())
+    result = snapshot_host(http_ctx, HOST_ID, force=True)
+    assert result.status == "ok", result.error
+    assert client.uploads == [], "загрузка через meshctrl не нужна"
+    assert "http://mon.local:8000/agent/snapshot.ps1" in client.runs[-1][1]
+
+
+def test_upload_local_file_is_unique_and_removed(ctx, client, monkeypatch):
+    upsert_hosts(ctx.db, [dict(DEVICE)], utcnow())
+    seen: list[Path] = []
+    original = client.upload_file
+
+    def spy(node_id, local_path, remote_dir, timeout=None, remote_name=None):
+        seen.append(Path(local_path))
+        return original(node_id, local_path, remote_dir, timeout=timeout, remote_name=remote_name)
+
+    monkeypatch.setattr(client, "upload_file", spy)
+    assert snapshot_host(ctx, HOST_ID, force=True).status == "ok"
+    assert len(seen) == 1
+    assert seen[0].name != f"rmm-monitor-snapshot-{snapshot_script_sha()[:12]}.ps1"
+    assert not seen[0].exists(), "временный файл должен удаляться после загрузки"
+    assert client.uploads[0][1] == f"rmm-monitor-snapshot-{snapshot_script_sha()[:12]}.ps1"
 
 
 def test_snapshot_error_is_recorded(ctx, client):
