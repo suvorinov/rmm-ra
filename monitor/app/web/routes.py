@@ -216,6 +216,7 @@ def _host_dict(host: Host) -> dict:
         "last_seen_online": iso_utc(host.last_seen_online),
         "last_inventory_at": iso_utc(host.last_inventory_at),
         "last_snapshot_at": iso_utc(host.last_snapshot_at),
+        "last_snapshot_attempt_at": iso_utc(host.last_snapshot_attempt_at),
         "last_snapshot_status": host.last_snapshot_status,
         "last_snapshot_error": host.last_snapshot_error,
         "metrics": {

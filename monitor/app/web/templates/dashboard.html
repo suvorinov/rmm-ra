@@ -77,7 +77,8 @@
       {% for host in hosts %}
         {% set stale = host.is_online and (host.last_snapshot_at is none or host.last_snapshot_at < stale_cutoff) %}
         {% set problem = (not host.is_online) or stale or host.last_snapshot_status == 'error' %}
-        <tr data-search="{{ (host.name ~ ' ' ~ host.hostname ~ ' ' ~ host.ip ~ ' ' ~ host.group_name ~ ' ' ~ host.os_desc)|lower }}"
+        <tr data-host-id="{{ host.id }}"
+            data-search="{{ (host.name ~ ' ' ~ host.hostname ~ ' ' ~ host.ip ~ ' ' ~ host.group_name ~ ' ' ~ host.os_desc)|lower }}"
             data-status="{% if not host.is_online %}offline{% elif problem %}problem{% else %}online{% endif %}">
           <td>
             {% if host.is_online %}

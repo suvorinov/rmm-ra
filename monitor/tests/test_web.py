@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+from urllib.parse import quote
 
 from fastapi.testclient import TestClient
 
 from app.collector import upsert_hosts
 from app.main import create_app
-from app.models import Host, Snapshot
+from app.models import BrowserSession, Host, ProcessSnapshot, Snapshot
 from app.timeutil import utcnow
 from app.web.urls import host_url
 
@@ -19,6 +20,10 @@ def seed(db, with_snapshot: bool = True):
     upsert_hosts(db, [dict(DEVICE)], utcnow())
     if not with_snapshot:
         return
+    with db.session() as session:
+        host = session.get(Host, HOST_ID)
+        host.last_snapshot_attempt_at = utcnow()
+        session.commit()
     with db.session() as session:
         snapshot = Snapshot(
             host_id=HOST_ID,
@@ -47,6 +52,27 @@ def seed(db, with_snapshot: bool = True):
         )
         session.add(snapshot)
         session.commit()
+        session.add_all(
+            [
+                BrowserSession(
+                    snapshot_id=snapshot.id,
+                    host_id=HOST_ID,
+                    name="Firefox",
+                    processes=17,
+                    memory_mb=768.5,
+                    users_json=json.dumps(["ZR\\ivanov"]),
+                ),
+                ProcessSnapshot(
+                    snapshot_id=snapshot.id,
+                    host_id=HOST_ID,
+                    name="1Cv8",
+                    count=2,
+                    ws_mb=512.0,
+                    cpu_s=42.5,
+                ),
+            ]
+        )
+        session.commit()
 
 
 def test_dashboard_host_page_and_api(settings, db):
@@ -57,6 +83,7 @@ def test_dashboard_host_page_and_api(settings, db):
         assert page.status_code == 200
         assert "Бухгалтерия-01" in page.text
         assert "в сети" in page.text
+        assert f'data-host-id="{HOST_ID}"' in page.text
 
         hosts = client.get("/api/hosts").json()["hosts"]
         assert len(hosts) == 1
@@ -68,6 +95,14 @@ def test_dashboard_host_page_and_api(settings, db):
         payload = detail.json()
         assert payload["snapshot"]["disks"][0]["mount"] == "C:"
         assert payload["snapshot"]["network"]["addresses"] == ["192.168.0.50"]
+        assert payload["snapshot"]["browsers"][0]["name"] == "Firefox"
+        assert payload["snapshot"]["processes"][0]["name"] == "1Cv8"
+        assert payload["last_snapshot_attempt_at"] is not None
+
+        # browser fetch() кодирует ID через encodeURIComponent — проверяем и этот путь
+        encoded = client.get("/api/hosts/" + quote(HOST_ID, safe=""))
+        assert encoded.status_code == 200
+        assert encoded.json()["id"] == HOST_ID
 
         host_page = client.get(host_url(HOST_ID))
         assert host_page.status_code == 200
