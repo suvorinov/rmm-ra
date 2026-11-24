@@ -64,12 +64,12 @@
         <th>Статус</th>
         <th>Хост</th>
         <th>Группа</th>
-        <th class="num">CPU</th>
-        <th class="num">RAM</th>
-        <th class="num">Диск</th>
-        <th class="num">Браузеры</th>
-        <th class="num">Процессы</th>
-        <th class="num">Аптайм</th>
+        <th class="num" aria-sort="none"><button class="sort-btn" type="button" data-sort="cpu">CPU <span class="sort-ind"></span></button></th>
+        <th class="num" aria-sort="none"><button class="sort-btn" type="button" data-sort="mem">RAM <span class="sort-ind"></span></button></th>
+        <th class="num" aria-sort="none"><button class="sort-btn" type="button" data-sort="disk">Диск <span class="sort-ind"></span></button></th>
+        <th class="num" aria-sort="none"><button class="sort-btn" type="button" data-sort="browsers">Браузеры <span class="sort-ind"></span></button></th>
+        <th class="num" aria-sort="none"><button class="sort-btn" type="button" data-sort="procs">Процессы <span class="sort-ind"></span></button></th>
+        <th class="num" aria-sort="none"><button class="sort-btn" type="button" data-sort="uptime">Аптайм <span class="sort-ind"></span></button></th>
         <th>Снимок</th>
       </tr>
     </thead>
@@ -79,7 +79,13 @@
         {% set problem = (not host.is_online) or stale or host.last_snapshot_status == 'error' %}
         <tr data-host-id="{{ host.id }}"
             data-search="{{ (host.name ~ ' ' ~ host.hostname ~ ' ' ~ host.ip ~ ' ' ~ host.group_name ~ ' ' ~ host.os_desc)|lower }}"
-            data-status="{% if not host.is_online %}offline{% elif problem %}problem{% else %}online{% endif %}">
+            data-status="{% if not host.is_online %}offline{% elif problem %}problem{% else %}online{% endif %}"
+            data-sort-cpu="{{ host.cpu_percent if host.cpu_percent is not none else '' }}"
+            data-sort-mem="{{ host.mem_percent if host.mem_percent is not none else '' }}"
+            data-sort-disk="{{ host.disk_max_percent if host.disk_max_percent is not none else '' }}"
+            data-sort-browsers="{{ host.browser_processes if host.browser_processes is not none else '' }}"
+            data-sort-procs="{{ host.process_count if host.process_count is not none else '' }}"
+            data-sort-uptime="{{ host.uptime_s if host.uptime_s is not none else '' }}">
           <td>
             {% if host.is_online %}
               <span class="badge badge-online"><span class="dot"></span>в сети</span>

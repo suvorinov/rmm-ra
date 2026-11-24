@@ -23,6 +23,13 @@ def seed(db, with_snapshot: bool = True):
     with db.session() as session:
         host = session.get(Host, HOST_ID)
         host.last_snapshot_attempt_at = utcnow()
+        host.cpu_percent = 23.4
+        host.mem_percent = 50.0
+        host.disk_max_percent = 74.7
+        host.browser_kinds = 2
+        host.browser_processes = 17
+        host.process_count = 143
+        host.uptime_s = 93784
         session.commit()
     with db.session() as session:
         snapshot = Snapshot(
@@ -84,6 +91,15 @@ def test_dashboard_host_page_and_api(settings, db):
         assert "Бухгалтерия-01" in page.text
         assert "в сети" in page.text
         assert f'data-host-id="{HOST_ID}"' in page.text
+
+        # кликабельные заголовки и числовые значения для сортировки
+        for column in ("cpu", "mem", "disk", "browsers", "procs", "uptime"):
+            assert f'data-sort="{column}"' in page.text
+            assert f'data-sort-{column}=' in page.text
+        for value in ('data-sort-cpu="23.4"', 'data-sort-mem="50.0"',
+                      'data-sort-disk="74.7"', 'data-sort-browsers="17"',
+                      'data-sort-procs="143"', 'data-sort-uptime="93784"'):
+            assert value in page.text
 
         hosts = client.get("/api/hosts").json()["hosts"]
         assert len(hosts) == 1

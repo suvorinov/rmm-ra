@@ -24,6 +24,68 @@
   status?.addEventListener("change", applyFilter);
   applyFilter();
 
+  // Сортировка метрик: первый клик — по убыванию, второй — по возрастанию,
+  // третий возвращает исходный порядок инвентаря. Фильтры не сбрасываются.
+  const sortButtons = Array.from(document.querySelectorAll("[data-sort]"));
+  if (sortButtons.length) {
+    const tableBody = sortButtons[0].closest("table")?.tBodies?.[0];
+    const originalOrder = rows.slice();
+    const initialIndex = new Map(originalOrder.map((row, index) => [row, index]));
+    let activeSort = null;
+    let sortDirection = 0; // 1 — возрастание, -1 — убывание
+
+    function sortValue(row) {
+      if (!activeSort) return 0;
+      const key = "sort" + activeSort.charAt(0).toUpperCase() + activeSort.slice(1);
+      const raw = row.dataset[key];
+      if (raw === undefined || raw === null || String(raw).trim() === "") return null;
+      const value = Number(raw);
+      return Number.isFinite(value) ? value : null;
+    }
+
+    function paintSort() {
+      for (const button of sortButtons) {
+        const header = button.closest("th");
+        const indicator = button.querySelector(".sort-ind");
+        const current = button.dataset.sort === activeSort;
+        button.classList.toggle("sort-active", current);
+        if (indicator) indicator.textContent = current ? (sortDirection === 1 ? "▲" : "▼") : "";
+        if (header) {
+          header.setAttribute("aria-sort", current
+            ? (sortDirection === 1 ? "ascending" : "descending")
+            : "none");
+        }
+      }
+    }
+
+    function applySort(key) {
+      if (activeSort === key) {
+        sortDirection = sortDirection === -1 ? 1 : 0;
+        if (sortDirection === 0) activeSort = null;
+      } else {
+        activeSort = key;
+        sortDirection = -1;
+      }
+      paintSort();
+      const ordered = activeSort
+        ? originalOrder.slice().sort((a, b) => {
+            const av = sortValue(a);
+            const bv = sortValue(b);
+            if (av === null && bv === null) return initialIndex.get(a) - initialIndex.get(b);
+            if (av === null) return 1;
+            if (bv === null) return -1;
+            return (av - bv) * sortDirection || initialIndex.get(a) - initialIndex.get(b);
+          })
+        : originalOrder;
+      if (tableBody) ordered.forEach((row) => tableBody.appendChild(row));
+    }
+
+    sortButtons.forEach((button) => {
+      button.addEventListener("click", () => applySort(button.dataset.sort || ""));
+    });
+    paintSort();
+  }
+
   const auto = document.querySelector("[data-auto-refresh]");
   const AUTO_KEY = "rmm-monitor-autorefresh";
   if (auto) {
