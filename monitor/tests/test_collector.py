@@ -216,6 +216,27 @@ def test_snapshot_uses_http_when_configured(ctx, client, settings):
     assert "http://mon.local:8000/agent/snapshot.ps1" in client.runs[-1][1]
 
 
+def test_http_snapshot_retries_truncated_output(ctx, client, settings, monkeypatch):
+    from app import collector
+
+    monkeypatch.setattr(collector.time, "sleep", lambda _seconds: None)
+    http_settings = replace(settings, agent_script_url="http://mon.local:8000")
+    http_ctx = CollectorContext(settings=http_settings, db=ctx.db, client=client)
+    upsert_hosts(ctx.db, [dict(DEVICE)], utcnow())
+
+    responses = iter(["###SNAPSHOT-BEGIN###{\"format\":1", snapshot_output()])
+
+    def flaky(node_id, command, timeout=None):
+        client.runs.append((node_id, command))
+        return next(responses)
+
+    monkeypatch.setattr(client, "run_command", flaky)
+    result = snapshot_host(http_ctx, HOST_ID, force=True)
+    assert result.status == "ok", result.error
+    assert len(client.runs) == 2
+    assert client.uploads == []
+
+
 def test_upload_local_file_is_unique_and_removed(ctx, client, monkeypatch):
     upsert_hosts(ctx.db, [dict(DEVICE)], utcnow())
     seen: list[Path] = []

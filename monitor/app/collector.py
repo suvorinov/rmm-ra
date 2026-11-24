@@ -588,6 +588,25 @@ def _collect_snapshot(ctx: CollectorContext, host_id: str, command: str) -> dict
     return parse_snapshot_output(output)
 
 
+def _is_transient_snapshot_error(text: str) -> bool:
+    """Ошибки, которые часто проходят сами за пару секунд.
+
+    MeshCentral иногда обрывает ответ на середине или не сразу маршрутизирует
+    команду агенту. Ручной повтор на тех же хостах почти всегда срабатывает.
+    """
+    low = text.lower()
+    return any(
+        marker in low
+        for marker in (
+            "снимок оборван",
+            "нет маркера снимка",
+            "agent not connected",
+            "unable to route",
+            "waiting for agent",
+        )
+    )
+
+
 def _run_uploaded_snapshot(
     ctx: CollectorContext, host_id: str, text: str, sha: str, cached: bool
 ) -> dict[str, Any]:
@@ -648,15 +667,26 @@ def snapshot_host(
                 )
                 try:
                     raw = _collect_snapshot(ctx, host_id, command)
-                except Exception as exc:  # noqa: BLE001
-                    # Агент не смог достучаться до мониторинга: один раз
-                    # откатываемся на классическую загрузку через meshctrl.
-                    try:
-                        raw = _run_uploaded_snapshot(ctx, host_id, text, sha, cached)
-                    except Exception as upload_exc:  # noqa: BLE001
-                        raise SnapshotError(
-                            f"по HTTP: {exc}; через upload: {upload_exc}"
-                        ) from upload_exc
+                except Exception as first_exc:  # noqa: BLE001
+                    raw = None
+                    http_exc: Exception = first_exc
+                    # Обрезанный ответ/«агент не подключён» часто проходят
+                    # повтором. Делаем одну быструю попытку до fallback-а.
+                    if _is_transient_snapshot_error(str(first_exc)):
+                        time.sleep(2)
+                        try:
+                            raw = _collect_snapshot(ctx, host_id, command)
+                        except Exception as second_exc:  # noqa: BLE001
+                            http_exc = second_exc
+                    if raw is None:
+                        # Агент не смог достучаться до мониторинга: один раз
+                        # откатываемся на классическую загрузку через meshctrl.
+                        try:
+                            raw = _run_uploaded_snapshot(ctx, host_id, text, sha, cached)
+                        except Exception as upload_exc:  # noqa: BLE001
+                            raise SnapshotError(
+                                f"по HTTP: {http_exc}; через upload: {upload_exc}"
+                            ) from upload_exc
             else:
                 raw = _run_uploaded_snapshot(ctx, host_id, text, sha, cached)
             data = normalise_snapshot(raw, now)
