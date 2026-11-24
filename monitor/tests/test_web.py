@@ -122,6 +122,30 @@ def test_cross_origin_post_is_rejected(settings, db):
         assert response.status_code == 403
 
 
+def test_health_alias_is_public(settings, db):
+    app = create_app(make_auth_settings(settings))
+    with TestClient(app) as client:
+        assert client.get("/health").status_code == 200
+        assert client.get("/health").json() == client.get("/healthz").json()
+
+
+def test_explicit_allowed_origin_is_accepted(settings, db):
+    import dataclasses
+
+    allowed = dataclasses.replace(
+        make_auth_settings(settings), allowed_origins=("http://dev.local:8000",)
+    )
+    app = create_app(allowed)
+    with TestClient(app) as client:
+        response = client.post(
+            "/refresh/inventory",
+            auth=("admin", "hunter2"),
+            headers={"Origin": "http://dev.local:8000"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+
+
 def test_dashboard_empty_state(settings, db):
     app = create_app(settings)
     with TestClient(app) as client:

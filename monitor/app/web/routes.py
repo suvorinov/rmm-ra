@@ -349,6 +349,7 @@ def api_snapshots(request: Request, host_id: str) -> JSONResponse:
 
 
 @router.get("/healthz")
+@router.get("/health", include_in_schema=False)
 def healthz(request: Request) -> JSONResponse:
     ctx = _ctx(request)
     db_ok = True

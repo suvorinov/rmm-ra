@@ -68,6 +68,7 @@ class Settings:
     auth_user: str = ""
     auth_pass: str = ""
     allow_anonymous: bool = False
+    allowed_origins: tuple[str, ...] = ()
 
     log_level: str = "INFO"
 
@@ -100,6 +101,12 @@ class Settings:
             auth_user=_env("MON_AUTH_USER"),
             auth_pass=_env("MON_AUTH_PASS"),
             allow_anonymous=_env_bool("MON_ALLOW_ANONYMOUS", False),
+            allowed_origins=tuple(
+                {
+                    item.rstrip("/")
+                    for item in _env("MON_ALLOWED_ORIGINS").replace(",", " ").split()
+                }
+            ),
             log_level=_env("MON_LOG_LEVEL", "INFO").upper() or "INFO",
         )
         settings._validate()
@@ -146,6 +153,7 @@ class Settings:
             "snapshot_concurrency": self.snapshot_concurrency,
             "retention_days": self.retention_days,
             "auth": "basic" if self.auth_enabled else "anonymous",
+            "allowed_origins": len(self.allowed_origins),
             "scheduler": self.scheduler_enabled,
         }
 

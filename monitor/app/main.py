@@ -33,7 +33,9 @@ WEB_DIR = BASE_DIR / "web"
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
-    "Referrer-Policy": "no-referrer",
+    # same-origin: свой Referer доходит до нас (запасной CSRF-проверки, если
+    # браузер не прислал Origin), но наружу утекать ничего не должно.
+    "Referrer-Policy": "same-origin",
     "Content-Security-Policy": (
         "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
         "script-src 'self'; base-uri 'none'; form-action 'self'; "
@@ -72,17 +74,35 @@ def _basic_ok(header: str, settings: Settings) -> bool:
     )
 
 
-def _same_origin(request: Request) -> bool:
-    """Примитивная защита от CSRF: браузерный POST должен быть со своего origin."""
-    host = request.headers.get("host", "")
+def _same_origin(request: Request, settings: Settings) -> bool:
+    """Примитивная защита от CSRF: браузерный POST должен быть со своего origin.
+
+    Host может отличаться от Origin в dev-режиме (IP vs имя хоста, reverse-прокси),
+    поэтому дополнительно разрешаем явный список MON_ALLOWED_ORIGINS. Отказы
+    пишем в лог без секретов — по ним сразу видно, что именно прислал браузер.
+    """
+    host = request.headers.get("host", "").lower()
     origin = request.headers.get("origin")
-    if origin:
-        return urlparse(origin).netloc == host
     referer = request.headers.get("referer")
-    if referer:
-        return urlparse(referer).netloc == host
-    # Не браузер (curl, скрипт) — Origin не присылает.
-    return True
+    value = origin or referer
+    if not value:
+        # Не браузер (curl, скрипт) — Origin/Referer не присылает.
+        return True
+    parsed = urlparse(value)
+    netloc = parsed.netloc.lower()
+    allowed = netloc == host
+    if not allowed and settings.allowed_origins:
+        allowed = value.rstrip("/").lower() in settings.allowed_origins or netloc in {
+            urlparse(item).netloc.lower() for item in settings.allowed_origins
+        }
+    if not allowed:
+        log.warning(
+            "cross-origin POST отклонён: host=%s origin=%s referer=%s",
+            host or "-",
+            origin or "-",
+            referer or "-",
+        )
+    return allowed
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -144,7 +164,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.middleware("http")
     async def guard(request: Request, call_next):
         path = request.url.path
-        if path == "/healthz" or path.startswith("/static/"):
+        if path in {"/healthz", "/health"} or path.startswith("/static/"):
             return _secure(await call_next(request))
 
         if settings.auth_enabled:
@@ -167,13 +187,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
             )
 
-        if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not _same_origin(request):
+        if (
+            request.method in {"POST", "PUT", "PATCH", "DELETE"}
+            and not _same_origin(request, settings)
+        ):
+            if path.startswith("/api/"):
+                return _secure(
+                    JSONResponse({"detail": "cross-origin request rejected"}, status_code=403)
+                )
+            # Обычная форма: отдаём нормальную страницу, а не голый JSON.
             return _secure(
-                JSONResponse({"detail": "cross-origin request rejected"}, status_code=403)
+                templates.TemplateResponse(
+                    request=request,
+                    name="error.html",
+                    context={
+                        "request": request,
+                        "settings": settings,
+                        "now": utcnow(),
+                        "page": "",
+                        "code": 403,
+                        "detail": "Запрос пришёл не с этой страницы. Обнови вкладку и попробуй снова.",
+                    },
+                    status_code=403,
+                ),
+                html=True,
             )
 
         response = await call_next(request)
-        return _secure(response, html=path not in {"/healthz"})
+        return _secure(response, html=path not in {"/healthz", "/health"})
 
     @app.exception_handler(HTTPException)
     async def http_error(request: Request, exc: HTTPException):
