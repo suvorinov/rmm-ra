@@ -9,11 +9,14 @@
 | Сервис | Контейнер | Доступ |
 |---|---|---|
 | MeshCentral | `meshcentral` | `https://rmm.zr.local` (через NPM) |
+| RMM Monitor | `rmm-monitor` | `https://mon.zr.local` (через NPM), отдельный compose |
 | RustDesk rendezvous | `rustdesk-hbbs` | TCP/UDP `21115-21116`, TCP `21118` |
 | RustDesk relay | `rustdesk-hbbr` | TCP `21117`, `21119` |
 | NPM | `nginx-proxy` | общий, вне проекта |
 
-Все контейнеры проекта — во внешней сети `zr_admin_net`.
+Все контейнеры проекта — во внешней сети `zr_admin_net`. Мониторинг поднимается
+отдельным файлом `docker-compose.monitor.yml` и использует ту же сеть;
+основной стек при этом не меняется.
 
 ## Репозитории
 
@@ -150,6 +153,29 @@ make mesh-doctor
 
 Подробно — [MESHCENTRAL_AGENT.md](https://github.com/suvorinov/ansible_project/blob/main/MESHCENTRAL_AGENT.md).
 
+## Мониторинг парка (RMM Monitor)
+
+Небольшой FastAPI-сервис со SQLite и серверными страницами: дашборд по хостам,
+нагрузка/процессы/запущенные браузеры, журнал задач. Агентов и Prometheus не
+добавляет — ходит в MeshCentral через `meshctrl` (инвентарь раз в минуту, снимки
+раз в 5 минут, с параллелизмом 4). История и закладки **не собираются**.
+
+```bash
+cp monitor/monitor.env.example monitor/monitor.env
+chmod 600 monitor/monitor.env
+# вписать MON_MC_USER / MON_MC_PASS сервисной учётки и MON_AUTH_PASS
+make monitor-up       # образ + контейнер (порт 8000 только внутри docker-сети)
+make monitor-status   # ps + healthz
+make monitor-logs
+make monitor-health
+make monitor-backup   # SQLite отдельно от общего бэкапа
+```
+
+В NPM нужно создать Proxy Host `mon.zr.local` → `http://monitor:8000`
+(Websockets off, SSL от того же внутреннего УЦ). Подробно — [MONITORING.md](MONITORING.md):
+учётка MeshCentral, переменные, API, приватность, диагностика и ограничения.
+Секреты (`monitor/monitor.env`) и БД (`monitor-data/`) в git не попадают.
+
 ## 2FA для администратора
 
 1. Войти в `https://rmm.zr.local` → **My Account** / **Мой аккаунт**.
@@ -248,8 +274,14 @@ make rustdesk-book
 make backup     # ./backups/rmm-ra-YYYYmmdd-HHMMSS.tar.gz (chmod 600)
 ```
 
-В архив попадают `docker-compose.yml`, `.env`, `Makefile`, `README.md`,
-`scripts/`, `meshcentral-data/`, `rustdesk-data/`.
+В архив попадают `docker-compose.yml`, `docker-compose.monitor.yml`, `.env`,
+`Makefile`, `README.md`, `MONITORING.md`, `.gitignore`, `scripts/`,
+`meshcentral-data/`, `rustdesk-data/`.
+
+БД мониторинга в общий архив **не входит** (там имена пользователей и хостов):
+```bash
+make monitor-backup   # ./backups/monitor-YYYYmmdd-HHMMSS.db (chmod 600)
+```
 
 Восстановление (стек остановлен):
 
@@ -269,6 +301,9 @@ make rustdesk-info  # адрес, ключ, порты и число пиров 
 make rustdesk-key   # только публичный ключ для настройки клиентов
 make mesh-groups    # ID групп устройств MeshCentral (для установки агентов)
 make mesh-doctor    # проверка сертификата, таймаутов NPM и устройств
+make monitor-build  # пересобрать образ мониторинга
+make monitor-up     # поднять мониторинг (нужен monitor/monitor.env)
+make monitor-health # healthz контейнера rmm-monitor
 make pull           # скачать свежие образы
 make update         # обновить и перезапустить
 ```

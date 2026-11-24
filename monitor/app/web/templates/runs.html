@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Задачи · {{ settings.title }}{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Задачи</h1>
+    <p class="muted">Инвентаризация, снимки и очистка. Последние 200 запусков.</p>
+  </div>
+</div>
+
+{% if runs %}
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Задача</th>
+          <th>Статус</th>
+          <th>Начало</th>
+          <th class="num">Длительность</th>
+          <th class="num">Успешно</th>
+          <th class="num">Ошибок</th>
+          <th>Сообщение</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for run in runs %}
+          <tr>
+            <td><b>{{ run.kind }}</b>{% if run.host_id %}<span class="sub mono">{{ run.host_id[-12:] }}</span>{% endif %}</td>
+            <td>
+              <span class="badge badge-{{ 'ok' if run.status == 'ok' else ('warn' if run.status == 'partial' else ('bad' if run.status == 'error' else 'muted')) }}">{{ run.status }}</span>
+            </td>
+            <td class="nowrap">{{ run.started_at|localtime }}</td>
+            <td class="num mono">
+              {% if run.finished_at %}{{ ((run.finished_at - run.started_at).total_seconds())|int|duration }}{% else %}…{% endif %}
+            </td>
+            <td class="num mono">{{ run.ok_count }}</td>
+            <td class="num mono">{{ run.fail_count }}</td>
+            <td class="run-msg">{{ run.message or '' }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <div class="empty">Задач пока не было.</div>
+{% endif %}
+
+{% endblock %}

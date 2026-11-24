@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block title %}Хосты · {{ settings.title }}{% endblock %}
+{% block content %}
+
+{% if queued == 'inventory' %}
+  <div class="notice">Инвентарь обновляется в фоне. Через несколько секунд список обновится.</div>
+{% elif error == 'rate' %}
+  <div class="notice notice-warn">Слишком часто: подожди немного перед повторным запуском.</div>
+{% endif %}
+
+<section class="summary-grid">
+  <article class="stat">
+    <span class="stat-label">Всего хостов</span>
+    <span class="stat-value">{{ summary.total }}</span>
+    <span class="stat-hint">в инвентаре MeshCentral</span>
+  </article>
+  <article class="stat stat-online">
+    <span class="stat-label">В сети</span>
+    <span class="stat-value">{{ summary.online }}</span>
+    <span class="stat-hint">{{ summary.offline }} офлайн</span>
+  </article>
+  <article class="stat {% if summary.stale %}stat-warn{% endif %}">
+    <span class="stat-label">Без свежих данных</span>
+    <span class="stat-value">{{ summary.stale }}</span>
+    <span class="stat-hint">снимок старше {{ stale_minutes }} мин</span>
+  </article>
+  <article class="stat {% if summary.errors %}stat-bad{% endif %}">
+    <span class="stat-label">Ошибки снимков</span>
+    <span class="stat-value">{{ summary.errors }}</span>
+    <span class="stat-hint">последняя попытка неудачна</span>
+  </article>
+  <article class="stat">
+    <span class="stat-label">Браузерные процессы</span>
+    <span class="stat-value">{{ summary.browsers }}</span>
+    <span class="stat-hint">на онлайн-хостах</span>
+  </article>
+  <article class="stat">
+    <span class="stat-label">Средняя нагрузка</span>
+    <span class="stat-value">{{ summary.cpu_avg|pct }}</span>
+    <span class="stat-hint">CPU · RAM {{ summary.mem_avg|pct }}</span>
+  </article>
+</section>
+
+<div class="toolbar">
+  <div class="toolbar-left">
+    <input class="input" type="search" placeholder="Фильтр: имя, IP, группа, ОС…" data-filter>
+    <select class="input select" data-status-filter>
+      <option value="">все статусы</option>
+      <option value="online">в сети</option>
+      <option value="offline">офлайн</option>
+      <option value="problem">требуют внимания</option>
+    </select>
+    <span class="muted">показано <b data-count>{{ hosts|length }}</b> из {{ hosts|length }}</span>
+  </div>
+  <form method="post" action="/refresh/inventory">
+    <button class="btn" type="submit">Обновить инвентарь</button>
+  </form>
+</div>
+
+<div class="table-wrap">
+  <table class="table hosts-table">
+    <thead>
+      <tr>
+        <th>Статус</th>
+        <th>Хост</th>
+        <th>Группа</th>
+        <th class="num">CPU</th>
+        <th class="num">RAM</th>
+        <th class="num">Диск</th>
+        <th class="num">Браузеры</th>
+        <th class="num">Процессы</th>
+        <th class="num">Аптайм</th>
+        <th>Снимок</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for host in hosts %}
+        {% set stale = host.is_online and (host.last_snapshot_at is none or host.last_snapshot_at < stale_cutoff) %}
+        {% set problem = (not host.is_online) or stale or host.last_snapshot_status == 'error' %}
+        <tr data-search="{{ (host.name ~ ' ' ~ host.hostname ~ ' ' ~ host.ip ~ ' ' ~ host.group_name ~ ' ' ~ host.os_desc)|lower }}"
+            data-status="{% if not host.is_online %}offline{% elif problem %}problem{% else %}online{% endif %}">
+          <td>
+            {% if host.is_online %}
+              <span class="badge badge-online"><span class="dot"></span>в сети</span>
+            {% else %}
+              <span class="badge badge-offline"><span class="dot"></span>офлайн</span>
+            {% endif %}
+            {% if stale %}<span class="badge badge-warn">устарел</span>{% endif %}
+            {% if host.last_snapshot_status == 'error' %}<span class="badge badge-bad">ошибка</span>{% endif %}
+          </td>
+          <td class="host-cell">
+            <a class="host-link" href="{{ host_url(host.id) }}">{{ host.name }}</a>
+            <span class="sub">{{ host.hostname }}{% if host.ip %} · {{ host.ip }}{% endif %}</span>
+          </td>
+          <td class="muted">{{ host.group_name or '—' }}</td>
+          <td class="num">
+            <div class="bar"><span class="bar-fill fill-cpu" style="width: {{ host.cpu_percent or 0 }}%"></span></div>
+            <span class="mono">{{ host.cpu_percent|pct }}</span>
+          </td>
+          <td class="num">
+            <div class="bar"><span class="bar-fill fill-mem" style="width: {{ host.mem_percent or 0 }}%"></span></div>
+            <span class="mono">{{ host.mem_percent|pct }}</span>
+          </td>
+          <td class="num">
+            <div class="bar"><span class="bar-fill fill-disk" style="width: {{ host.disk_max_percent or 0 }}%"></span></div>
+            <span class="mono">{{ host.disk_max_percent|pct }}</span>
+          </td>
+          <td class="num mono">{{ host.browser_kinds or 0 }} / {{ host.browser_processes or 0 }}</td>
+          <td class="num mono">{{ host.process_count or '—' }}</td>
+          <td class="num mono">{{ host.uptime_s|duration }}</td>
+          <td class="nowrap muted" title="{{ host.last_snapshot_at|localtime }}">{{ host.last_snapshot_at|ago }}</td>
+        </tr>
+      {% else %}
+        <tr>
+          <td colspan="10" class="empty">
+            Пока пусто. Если агенты уже стоят в MeshCentral — нажми «Обновить инвентарь» и проверь логи:
+            <code>make monitor-logs</code>.
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<section class="panel panel-runs">
+  <div class="panel-head">
+    <h2>Последние задачи</h2>
+    <a class="link" href="/runs">все →</a>
+  </div>
+  <div class="run-list">
+    {% for run in recent_runs %}
+      <div class="run-item">
+        <span class="badge badge-{{ 'ok' if run.status == 'ok' else ('warn' if run.status == 'partial' else ('bad' if run.status == 'error' else 'muted')) }}">{{ run.status }}</span>
+        <span class="run-kind">{{ run.kind }}</span>
+        <span class="muted">{{ run.started_at|localtime('%d.%m %H:%M:%S') }}</span>
+        <span class="muted">ok {{ run.ok_count }} · ошибок {{ run.fail_count }}</span>
+        {% if run.message %}<span class="run-msg" title="{{ run.message }}">{{ run.message }}</span>{% endif %}
+      </div>
+    {% else %}
+      <p class="muted">Задач ещё не было.</p>
+    {% endfor %}
+  </div>
+</section>
+
+{% endblock %}

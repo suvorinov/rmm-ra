@@ -1,0 +1,212 @@
+# Мониторинг парка поверх MeshCentral
+
+Небольшой сервис `RMM Monitor`: дашборд по хостам, нагрузка/процессы/браузеры.
+**Новых агентов на хостах не ставим**, Prometheus/Grafana не добавляем.
+Единственный канал — MeshCentral: его CLI `meshctrl` (WebSocket API).
+Основной стек (`docker-compose.yml`) не меняется — мониторинг живёт в отдельном
+`docker-compose.monitor.yml` и в той же docker-сети `zr_admin_net`.
+
+## Что собирается
+
+Раз в минуту — инвентарь (`ListDevices --json`): имя, группа, IP, ОС, версия
+агента, online/offline. В MeshCentral после переустановок агентов копятся дубли
+с одним hostname; мониторинг оставляет по одному устройству на имя (сначала
+онлайн, потом самое свежее, затем уже выбранный node id), чтобы дашборд не
+затопили исторические записи.
+
+Раз в 5 минут — компактный снимок Windows-хоста:
+
+- CPU (модель, ядра, загрузка, очередь), RAM, аптайм;
+- диски (занято/свободно по томам);
+- IPv4-адреса;
+- топ процессов по памяти (имя, число экземпляров, память, CPU-время);
+- запущенные браузеры и их пользователи;
+- интерактивный пользователь и активные сессии.
+
+**Не собирается:** история посещений, закладки, cookie, пароли, содержимое
+файлов, кейлоггинг, скриншоты. История/закладки — отдельный режим по запросу
+(фаза 2), он описан в `WINDOWS_AUDIT.md` в проекте `ansible_project` и требует
+явного уведомления пользователей, срока хранения и RBAC. В дашборд эти данные
+не попадают.
+
+Снимок делается PowerShell-скриптом `monitor/app/ps/snapshot.ps1`. Скрипт
+**один раз** заливается на хост в `C:\Windows\Temp\rmm-monitor-snapshot-<sha12>.ps1`
+через `meshctrl Upload`; дальше только короткая команда
+`powershell.exe ... -File ... -Top 25`. Если Temp почистили — сервис заметит
+характерную ошибку, перезальёт скрипт и повторит попытку. SHA хранится в БД,
+поэтому 7 КБ скрипта не гоняются каждые 5 минут на 160 хостов.
+
+## Развёртывание
+
+### 1. Сервисная учётка MeshCentral
+
+В UI MeshCentral создай отдельного пользователя (например, `svc-monitor`) с
+доступом только к нужным группам устройств. Ему нужны права на чтение устройств,
+`RunCommand` и `Upload`. Не используй личный админский аккаунт.
+Для сервисного аккаунта 2FA лучше не включать — иначе придётся хранить
+одноразовый токен в `MON_MC_TOKEN` и обновлять его.
+
+### 2. Переменные окружения
+
+```bash
+cd ~/opt/rmm-ra
+cp monitor/monitor.env.example monitor/monitor.env
+chmod 600 monitor/monitor.env
+$EDITOR monitor/monitor.env     # MON_MC_USER / MON_MC_PASS / MON_AUTH_PASS
+```
+
+Файл в git не попадает (`.gitignore`). Пароль передаётся в `meshctrl` только
+через `MESHCTRL_LOGINPASS` в окружении процесса — не в argv, поэтому его не
+видно в `/proc/<pid>/cmdline`. Секреты вырезаются из логов и сообщений об
+ошибках (`redact()`), логин-ключ в URL маскируется как `key=***`.
+
+Вместо пароля можно использовать login key:
+`MON_MC_URL=ws://meshcentral:443?key=xxxxxxxx`.
+
+Основные переменные (все с префиксом `MON_`):
+
+| Переменная | По умолчанию | Смысл |
+|---|---|---|
+| `MON_MC_URL` | `ws://meshcentral:443` | WebSocket MeshCentral внутри docker-сети (HTTP, `tlsOffload`) |
+| `MON_MC_USER` / `MON_MC_PASS` | — | сервисный аккаунт MeshCentral |
+| `MON_MC_TOKEN` | — | 2FA-токен, если он реально нужен |
+| `MON_AUTH_USER` / `MON_AUTH_PASS` | — | HTTP Basic для веб-интерфейса |
+| `MON_ALLOW_ANONYMOUS` | `false` | только для локальной отладки |
+| `MON_INVENTORY_INTERVAL` | `60` | инвентаризация, сек |
+| `MON_SNAPSHOT_INTERVAL` | `300` | снимки, сек |
+| `MON_SNAPSHOT_CONCURRENCY` | `4` | параллельных `meshctrl`-команд |
+| `MON_SNAPSHOT_TIMEOUT` | `90` | таймаут одной команды, сек |
+| `MON_SNAPSHOT_TOP_PROCESSES` | `25` | сколько процессов в топе |
+| `MON_SNAPSHOT_MAX_HOSTS` | `0` | `0` = все; можно ограничить для первого запуска |
+| `MON_RETENTION_DAYS` | `30` | хранение снимков |
+| `MON_RETENTION_RUNS_DAYS` | `30` | хранение журнала задач |
+| `MON_DB_PATH` | `/data/monitor.db` | SQLite (права 0600) |
+| `MON_TZ` | `Europe/Moscow` | зона отображения времени (в БД — naive UTC) |
+| `MON_TITLE` | `RMM Monitor` | заголовок страниц |
+
+### 3. Подъём
+
+```bash
+make monitor-up          # соберёт образ и поднимет контейнер
+make monitor-status      # ps + healthz
+make monitor-health      # только healthz
+make monitor-logs        # логи (Ctrl+C)
+```
+
+Контейнер слушает `0.0.0.0:8000` **внутри** docker-сети, наружу порт не
+публикуется. Данные — в `./monitor-data` (каталог 0700, БД 0600, в git не
+попадает). Контейнер запускается от uid/gid 1000, `read_only: true`, `tmpfs
+/tmp`, `cap_drop: ALL`, `no-new-privileges`.
+
+### 4. NPM (nginx-proxy-manager)
+
+Создай Proxy Host `mon.zr.local`:
+
+- **Scheme:** `http`
+- **Forward Hostname / IP:** `monitor`
+- **Forward Port:** `8000`
+- **Websockets:** off (здесь нет WebSocket на клиентской стороне)
+- **SSL:** тот же внутренний УЦ `ZR-ADMIN Root CA`, что и для `rmm.zr.local`
+- при желании — Access List NPM в addition к HTTP Basic самого сервиса
+
+Не ставь `https` в Scheme: tlsOffload, как у MeshCentral, здесь не используется,
+сервис отдаёт обычный HTTP. `proxy_read_timeout 3600s` из
+`make npm-ws-timeout` ему не мешает.
+
+Проверка:
+
+```bash
+curl -u admin:'...' -sk --resolve mon.zr.local:443:127.0.0.1 \
+  https://mon.zr.local/healthz
+```
+
+## Интерфейс
+
+- `/` — дашборд: всего/онлайн/устаревшие/ошибки, средняя нагрузка, таблица
+  хостов с фильтром по имени/IP/группе/ОС и статусу;
+- `/host/<id>` — карточка: графики CPU/RAM (SVG, без внешних библиотек), диски,
+  браузеры, пользователи, топ процессов, история снимков, кнопка «Снять сейчас»;
+- `/runs` — журнал задач (инвентарь, снимки, очистка);
+- `/healthz` — состояние БД, планировщика и MeshCentral (без авторизации,
+  секретов не содержит).
+
+JSON API (тоже под Basic): `/api/summary`, `/api/hosts`, `/api/hosts/<id>`,
+`/api/snapshots/<id>?limit=100`.
+
+Ручной «Снять сейчас» и «Обновить инвентарь» троттлится (20 и 10 секунд) и
+запускается в фоновом потоке; POST защищён проверкой `Origin`/`Referer`.
+Страницы отдают заголовки `Content-Security-Policy`, `X-Frame-Options: DENY`,
+`X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` и
+`Cache-Control: no-store`.
+
+## Устройство планировщика
+
+`APScheduler` в процессе uvicorn:
+
+- инвентарь — каждые 60 с, сразу при старте;
+- снимки — каждые 300 с, через 20 с после старта;
+- очистка — ежедневно в 03:30 `MON_TZ`.
+
+У задач `coalesce=True` и `max_instances=1`: если опрос залип, следующий тик
+не плодит конкурентов. Снимок берётся только у онлайн-Windows-хостов без
+свежего снимка (>80% интервала), с ограничением параллелизма. Результат пишется
+в `job_runs`, а ошибка — в `hosts.last_snapshot_error`.
+
+## Приватность и доступ
+
+- В БД хранятся имена хостов, IP, имена пользователей Windows и процессы —
+  это уже внутренняя информация, поэтому `monitor-data/` и `monitor.env`
+  в git не попадают, а БД закрыта правами 0600.
+- Веб-интерфейс закрыт HTTP Basic. Для большего числа пользователей можно
+  повесить Access List NPM, но помни: Basic без HTTPS светит паролем —
+  используй `mon.zr.local` только через NPM с TLS.
+- Ручные экспорты/API отдают те же данные, что и экран; отдельного режима
+  «только админ» сейчас нет — не давай ссылку на мониторинг широкому кругу.
+- История/закладки Collector не трогает. Если позже включишь аудит браузеров,
+  сделай это отдельным выключенным по умолчанию модулем: уведомление
+  пользователей, правовое основание, срок хранения, отдельная роль и шифрование
+  экспортов.
+
+## Диагностика
+
+```bash
+make monitor-status
+make monitor-logs
+docker exec rmm-monitor python -c "import json,urllib.request; print(json.dumps(json.load(urllib.request.urlopen('http://127.0.0.1:8000/healthz')), ensure_ascii=False, indent=2))"
+
+# что реально делает meshctrl (из контейнера мониторинга):
+docker exec -e MESHCTRL_URL=ws://meshcentral:443 -e MESHCTRL_LOGINUSER=svc-monitor \
+  rmm-monitor node /opt/meshctrl/meshctrl.js ListDevices --json | head
+```
+
+Типичные проблемы:
+
+| Симптом | Причина / лечение |
+|---|---|
+| `healthz.meshctrl: false` | в образе не нашёлся `meshctrl.js` или `node`; пересобери `make monitor-build` |
+| инвентарь в ошибке `Invalid login` | неверный `MON_MC_USER/MON_MC_PASS` или у аккаунта 2FA (нужен `MON_MC_TOKEN`) |
+| `ListDevices` пустой | у сервисного аккаунта нет прав на группы устройств |
+| снимки `Access denied` | аккаунту не разрешён `RunCommand`/`Upload` на этих устройствах |
+| хосты «устарели» | агент офлайн (`make mesh-doctor`), либо NPM закрыл WebSocket |
+| `Upload error.` в логах | нет прав на `C:\Windows\Temp` или агент не поддерживает файловую передачу |
+| `не разобрал JSON от meshctrl` | строка из meshctrl не массив — проверь, что `--json` не отпал при обновлении CLI |
+
+## Бэкап
+
+```bash
+make monitor-backup    # ./backups/monitor-YYYYmmdd-HHMMSS.db, chmod 600
+```
+
+Основной `make backup` архивирует только стек RMM; БД мониторинга добавляется
+отдельно, чтобы не тащить PII в общий архив.
+
+## Разработка
+
+```bash
+cd monitor
+python3 -m venv /tmp/monitor-venv
+/tmp/monitor-venv/bin/pip install -r requirements.txt -r requirements-dev.txt
+/tmp/monitor-venv/bin/python -m pytest -q
+```
+
+Тесты не требуют Node, MeshCentral и Windows: всё закрыто фейковым клиентом.

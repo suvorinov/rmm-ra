@@ -1,0 +1,218 @@
+{% extends "base.html" %}
+{% block title %}{{ host.name }} · {{ settings.title }}{% endblock %}
+{% block content %}
+
+<nav class="crumbs"><a href="/">← все хосты</a></nav>
+
+{% if queued %}
+  <div class="notice">Снимок поставлен в очередь. Обнови страницу через несколько секунд.</div>
+{% elif error == 'rate' %}
+  <div class="notice notice-warn">Слишком часто: подожди 20 секунд перед повторным снимком.</div>
+{% endif %}
+
+{% if host.last_snapshot_status == 'error' %}
+  <div class="notice notice-bad">
+    <b>Последняя попытка снимка не удалась.</b>
+    {% if host.last_snapshot_attempt_at %}<span class="muted">({{ host.last_snapshot_attempt_at|ago }})</span>{% endif %}
+    <div class="error-text">{{ host.last_snapshot_error or 'причина не записана' }}</div>
+  </div>
+{% endif %}
+
+<header class="host-head">
+  <div class="host-title">
+    <h1>{{ host.name }}</h1>
+    <div class="badges">
+      {% if host.is_online %}
+        <span class="badge badge-online"><span class="dot"></span>в сети</span>
+      {% else %}
+        <span class="badge badge-offline"><span class="dot"></span>офлайн</span>
+      {% endif %}
+      {% if host.is_online and (host.last_snapshot_at is none or host.last_snapshot_at < stale_cutoff) %}
+        <span class="badge badge-warn">данные устарели</span>
+      {% endif %}
+    </div>
+    <p class="host-meta">
+      <span>{{ host.hostname or host.id }}</span>
+      {% if host.ip %}<span>{{ host.ip }}</span>{% endif %}
+      {% if host.group_name %}<span>{{ host.group_name }}</span>{% endif %}
+      {% if host.os_desc %}<span>{{ host.os_desc }}</span>{% endif %}
+      {% if host.agent_version %}<span>агент {{ host.agent_version }}</span>{% endif %}
+    </p>
+    <button class="btn btn-ghost btn-small" type="button" data-copy="{{ host.id }}">копировать ID</button>
+  </div>
+  <div class="host-actions">
+    <form method="post" action="/refresh/{{ host.id }}">      <button class="btn btn-primary" type="submit">Снять сейчас</button>
+    </form>
+  </div>
+</header>
+
+<section class="summary-grid host-stats">
+  <article class="stat">
+    <span class="stat-label">CPU</span>
+    <span class="stat-value">{{ (latest.cpu_percent if latest else host.cpu_percent)|pct }}</span>
+    <span class="stat-hint">{{ host.cpu_cores or '?' }} ядер / {{ host.cpu_logical or '?' }} потоков</span>
+  </article>
+  <article class="stat">
+    <span class="stat-label">RAM</span>
+    <span class="stat-value">{{ (latest.mem_percent if latest else host.mem_percent)|pct }}</span>
+    <span class="stat-hint">{{ host.mem_used_mb|mb }} из {{ host.mem_total_mb|mb }}</span>
+  </article>
+  <article class="stat">
+    <span class="stat-label">Аптайм</span>
+    <span class="stat-value small">{{ host.uptime_s|duration }}</span>
+    <span class="stat-hint">{{ host.last_seen_online|ago }}</span>
+  </article>
+  <article class="stat">
+    <span class="stat-label">Процессы</span>
+    <span class="stat-value">{{ host.process_count or '—' }}</span>
+    <span class="stat-hint">браузерных: {{ host.browser_processes or 0 }}</span>
+  </article>
+</section>
+
+<div class="grid-2">
+  <section class="panel">
+    <div class="panel-head"><h2>Нагрузка</h2><span class="muted">последние {{ cpu_chart.count }} снимков</span></div>
+    <div class="chart-row">
+      <div class="chart-caption">
+        <span>CPU</span>
+        <b>{{ cpu_chart.last|pct }}</b>
+      </div>
+      {% if cpu_chart.empty %}
+        <p class="muted">Нет данных.</p>
+      {% else %}
+        <svg class="spark spark-cpu" viewBox="0 0 {{ cpu_chart.width }} {{ cpu_chart.height }}" preserveAspectRatio="none" role="img" aria-label="CPU">
+          <path class="spark-area" d="{{ cpu_chart.area }}"></path>
+          <path class="spark-line" d="{{ cpu_chart.line }}"></path>
+        </svg>
+      {% endif %}
+    </div>
+    <div class="chart-row">
+      <div class="chart-caption">
+        <span>RAM</span>
+        <b>{{ mem_chart.last|pct }}</b>
+      </div>
+      {% if mem_chart.empty %}
+        <p class="muted">Нет данных.</p>
+      {% else %}
+        <svg class="spark spark-mem" viewBox="0 0 {{ mem_chart.width }} {{ mem_chart.height }}" preserveAspectRatio="none" role="img" aria-label="RAM">
+          <path class="spark-area" d="{{ mem_chart.area }}"></path>
+          <path class="spark-line" d="{{ mem_chart.line }}"></path>
+        </svg>
+      {% endif %}
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Диски</h2><span class="muted">{% if host.disk_free_gb is not none %}{{ host.disk_free_gb|round(1) }} ГБ свободно{% else %}нет данных{% endif %}</span></div>
+    {% if latest and latest.disks %}
+      <table class="table compact">
+        <thead><tr><th>Диск</th><th>Занято</th><th class="num">Свободно</th></tr></thead>
+        <tbody>
+          {% for disk in latest.disks %}
+            <tr>
+              <td><b>{{ disk.mount }}</b> <span class="muted">{{ disk.label }}</span></td>
+              <td>
+                <div class="bar"><span class="bar-fill fill-disk" style="width: {{ disk.used_pct }}%"></span></div>
+                <span class="mono">{{ disk.used_pct|pct }} · {{ disk.total_gb }} ГБ</span>
+              </td>
+              <td class="num mono">{{ disk.free_gb }} ГБ</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="muted">Данных о дисках пока нет.</p>
+    {% endif %}
+  </section>
+</div>
+
+<div class="grid-2">
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Браузеры</h2>
+      <span class="muted">{{ latest.users|join(', ') if latest and latest.users else 'пользователи не определены' }}</span>
+    </div>
+    {% if browsers %}
+      <table class="table compact">
+        <thead><tr><th>Браузер</th><th class="num">Процессы</th><th class="num">Память</th><th>Пользователи</th></tr></thead>
+        <tbody>
+          {% for browser in browsers %}
+            <tr>
+              <td>{{ browser.name }}</td>
+              <td class="num mono">{{ browser.processes }}</td>
+              <td class="num mono">{{ browser.memory_mb|mb }}</td>
+              <td>
+                {% for user in browser.users %}<span class="chip">{{ user }}</span>{% else %}<span class="muted">—</span>{% endfor %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="muted">Браузерные процессы не обнаружены.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>Пользователи и сеть</h2></div>
+    <dl class="kv">
+      <dt>Консольный пользователь</dt><dd>{{ host.console_user or '—' }}</dd>
+      <dt>Активные сессии</dt>
+      <dd>{% for user in (latest.users if latest else []) %}<span class="chip">{{ user }}</span>{% else %}<span class="muted">—</span>{% endfor %}</dd>
+      <dt>IP-адреса</dt>
+      <dd>{% for ip in (latest.network.addresses if latest else []) %}<span class="chip">{{ ip }}</span>{% else %}<span class="muted">—</span>{% endfor %}</dd>
+      <dt>Первый снимок</dt><dd>{{ host.last_snapshot_at|localtime }}</dd>
+      <dt>Последний ответ</dt><dd>{{ latest.reported_at|localtime if latest and latest.reported_at else '—' }}</dd>
+      <dt>CPU</dt><dd>{{ host.cpu_model or '—' }}</dd>
+    </dl>
+  </section>
+</div>
+
+<section class="panel">
+  <div class="panel-head"><h2>Процессы</h2><span class="muted">топ по памяти</span></div>
+  {% if processes %}
+    <div class="table-wrap">
+      <table class="table compact">
+        <thead><tr><th>Процесс</th><th class="num">Экз.</th><th class="num">Память</th><th class="num">CPU-время</th></tr></thead>
+        <tbody>
+          {% for process in processes %}
+            <tr>
+              <td class="mono">{{ process.name }}</td>
+              <td class="num mono">{{ process.count }}</td>
+              <td class="num mono">{{ process.ws_mb|mb }}</td>
+              <td class="num mono">{{ process.cpu_s }} с</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="muted">Нет данных о процессах.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2>История снимков</h2><span class="muted">{{ snapshots|length }} записей</span></div>
+  {% if snapshots %}
+    <div class="table-wrap">
+      <table class="table compact">
+        <thead><tr><th>Время</th><th class="num">CPU</th><th class="num">RAM</th><th class="num">Процессы</th><th class="num">Браузеры</th></tr></thead>
+        <tbody>
+          {% for snapshot in snapshots|reverse %}
+            <tr>
+              <td class="nowrap">{{ snapshot.taken_at|localtime }}</td>
+              <td class="num mono">{{ snapshot.cpu_percent|pct }}</td>
+              <td class="num mono">{{ snapshot.mem_percent|pct }}</td>
+              <td class="num mono">{{ snapshot.process_count or '—' }}</td>
+              <td class="num mono">{{ snapshot.browser_processes or 0 }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="muted">Снимков ещё не было.</p>
+  {% endif %}
+</section>
+
+{% endblock %}

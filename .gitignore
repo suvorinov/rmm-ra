@@ -8,6 +8,14 @@ meshcentral-backups/
 rustdesk-data/
 backups/
 
+# Мониторинг: БД с именами хостов/пользователей и секреты сервиса
+monitor-data/
+monitor/monitor.env
+monitor/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
 # Разное
 text.txt
 *.bak-*

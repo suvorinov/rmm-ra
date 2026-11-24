@@ -1,0 +1,39 @@
+# Мониторинг парка поверх MeshCentral.
+# Отдельный compose-файл: основной стек (docker-compose.yml) не трогаем.
+services:
+  monitor:
+    build:
+      context: ./monitor
+    image: rmm-ra-monitor:latest
+    container_name: rmm-monitor
+    restart: unless-stopped
+    env_file:
+      - ./monitor/monitor.env
+    environment:
+      - TZ=${TZ:-Europe/Moscow}
+    user: "${MON_UID:-1000}:${MON_GID:-1000}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    volumes:
+      - ./monitor-data:/data
+    networks:
+      - zr_admin_net
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+networks:
+  zr_admin_net:
+    external: true

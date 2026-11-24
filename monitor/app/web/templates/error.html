@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ code }} · {{ settings.title }}{% endblock %}
+{% block content %}
+<div class="empty-page">
+  <p class="empty-code">{{ code }}</p>
+  <h1>{{ detail }}</h1>
+  <p class="muted">Проверь адрес или вернись к списку хостов.</p>
+  <a class="btn btn-primary" href="/">К списку хостов</a>
+</div>
+{% endblock %}
