@@ -171,6 +171,11 @@ make monitor-health
 make monitor-backup   # SQLite отдельно от общего бэкапа
 ```
 
+RustDesk-книга (`IP → ID`) подтягивается в мониторинг отдельно:
+`make rustdesk-book && make monitor-import-rustdesk`. После этого в строке хоста
+появляется кнопка «RustDesk», а нажатия идут через `/api/rustdesk/connect/<id>`
+с аудитом. Пароли RustDesk никуда не импортируются.
+
 В NPM нужно создать Proxy Host `mon.zr.local` → `http://monitor:8000`
 (Websockets off, SSL от того же внутреннего УЦ). Для разработки без Docker —
 `make monitor-dev`, сервис слушает `0.0.0.0:8000` и доступен по

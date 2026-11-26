@@ -139,17 +139,43 @@ curl -u admin:'...' -sk --resolve mon.zr.local:443:127.0.0.1 \
   процессов (данные берутся с `/api/hosts/<id>` без перезагрузки страницы);
 - `/host/<id>` — карточка: графики CPU/RAM (SVG, без внешних библиотек), диски,
   браузеры, пользователи, топ процессов, история снимков, кнопка «Снять сейчас»;
-- `/runs` — журнал задач (инвентарь, снимки, очистка);
+- `/runs` — журнал задач (инвентарь, снимки, очистка) и последние подключения
+  через RustDesk;
 - `/healthz` — состояние БД, планировщика и MeshCentral (без авторизации,
   секретов не содержит).
 
 JSON API (тоже под Basic): `/api/summary`, `/api/hosts`, `/api/hosts/<id>`,
-`/api/snapshots/<id>?limit=100`.
+`/api/snapshots/<id>?limit=100`, `/api/rustdesk/connect/<id>?format=json`.
+
+### RustDesk: адресная книга по IP
+
+Источник — `reports/rustdesk-book.html`, который собирается командой
+`make rustdesk-book` из отчётов Ansible. В мониторинг попадают только IP,
+RustDesk ID, версия и признак «постоянный пароль задан». **Самих паролей
+в БД, API и логах нет.**
+
+```bash
+make rustdesk-book            # пересобрать HTML из ~/working/ansible_project/reports/rustdesk
+make monitor-import-rustdesk  # синхронизировать book → SQLite мониторинга
+```
+
+Импорт — полный: исчезнувшие из книги IP удаляются, изменённые ID обновляются.
+Кнопка «RustDesk» в строке таблицы и в модалке хоста ведёт не напрямую в
+`rustdesk://`, а в `/api/rustdesk/connect/<host_id>`. Эндпоинт проверяет, что
+ID состоит только из цифр, пишет событие в аудит (пользователь, хост, IP, ID,
+время — без секретов) и делает редирект `302` на
+`rustdesk://connection/new/<ID>`. Если записи нет — `404`. Для скриптов можно
+добавить `?format=json` и получить тот же адрес в JSON без редиректа.
+
+В контейнере `./reports` смонтирован только для чтения, поэтому импорт можно
+запустить и внутри:
+`docker exec rmm-monitor python -m app.rustdesk_book --file /app/reports/rustdesk-book.html`.
+Старая книга помечается бейджем «книга устарела», если файлу больше 7 суток.
 
 Ручной «Снять сейчас» и «Обновить инвентарь» троттлится (20 и 10 секунд) и
 запускается в фоновом потоке; POST защищён проверкой `Origin`/`Referer`.
 Страницы отдают заголовки `Content-Security-Policy`, `X-Frame-Options: DENY`,
-`X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` и
+`X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin` и
 `Cache-Control: no-store`.
 
 ## Устройство планировщика

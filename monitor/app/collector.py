@@ -21,7 +21,14 @@ from sqlalchemy import delete, desc, select
 from .config import Settings, redact
 from .db import Database
 from .mc import MeshCentralClient, MeshCentralError
-from .models import BrowserSession, Host, JobRun, ProcessSnapshot, Snapshot
+from .models import (
+    BrowserSession,
+    Host,
+    JobRun,
+    ProcessSnapshot,
+    RustdeskEvent,
+    Snapshot,
+)
 from .timeutil import clamp, iso_utc, parse_iso, utcnow
 
 log = logging.getLogger(__name__)
@@ -830,6 +837,9 @@ def run_cleanup(ctx: CollectorContext) -> None:
                     JobRun.started_at < runs_cutoff, JobRun.status != "running"
                 )
             ).rowcount
+            deleted_rd_events = session.execute(
+                delete(RustdeskEvent).where(RustdeskEvent.at < runs_cutoff)
+            ).rowcount
             session.commit()
         finish_job_run(
             ctx.db,
@@ -837,10 +847,16 @@ def run_cleanup(ctx: CollectorContext) -> None:
             status="ok",
             ok_count=int(deleted_snaps or 0),
             fail_count=0,
-            message=f"удалено снимков: {deleted_snaps or 0}, записей задач: {deleted_runs or 0}",
+            message=(
+                f"удалено снимков: {deleted_snaps or 0}, записей задач: {deleted_runs or 0}, "
+                f"событий RustDesk: {deleted_rd_events or 0}"
+            ),
         )
         ctx.log.info(
-            "очистка: снимков=%s задач=%s", deleted_snaps or 0, deleted_runs or 0
+            "очистка: снимков=%s задач=%s событий RustDesk=%s",
+            deleted_snaps or 0,
+            deleted_runs or 0,
+            deleted_rd_events or 0,
         )
     except Exception as exc:  # noqa: BLE001
         finish_job_run(ctx.db, run_id, status="error", message=str(exc)[:1000])

@@ -39,11 +39,16 @@
     <span class="stat-value">{{ summary.cpu_avg|pct }}</span>
     <span class="stat-hint">CPU · RAM {{ summary.mem_avg|pct }}</span>
   </article>
+  <article class="stat {% if rustdesk_stale %}stat-warn{% endif %}">
+    <span class="stat-label">RustDesk</span>
+    <span class="stat-value">{{ rustdesk_total }}</span>
+    <span class="stat-hint">ID в книге{% if rustdesk_mtime %} · {{ rustdesk_mtime|localtime('%d.%m') }}{% endif %}</span>
+  </article>
 </section>
 
 <div class="toolbar">
   <div class="toolbar-left">
-    <input class="input" type="search" placeholder="Фильтр: имя, IP, группа, ОС…" data-filter>
+    <input class="input" type="search" placeholder="Фильтр: имя, IP, RustDesk ID, группа…" data-filter>
     <select class="input select" data-status-filter>
       <option value="">все статусы</option>
       <option value="online">в сети</option>
@@ -63,6 +68,7 @@
       <tr>
         <th>Статус</th>
         <th>Хост</th>
+        <th>RustDesk</th>
         <th>Группа</th>
         <th class="num" aria-sort="none"><button class="sort-btn" type="button" data-sort="cpu">CPU <span class="sort-ind"></span></button></th>
         <th class="num" aria-sort="none"><button class="sort-btn" type="button" data-sort="mem">RAM <span class="sort-ind"></span></button></th>
@@ -77,8 +83,10 @@
       {% for host in hosts %}
         {% set stale = host.is_online and (host.last_snapshot_at is none or host.last_snapshot_at < stale_cutoff) %}
         {% set problem = (not host.is_online) or stale or host.last_snapshot_status == 'error' %}
+        {% set rd = rustdesk.get(host.ip) if host.ip else none %}
+        {% set rd_id = rd.rustdesk_id if rd and rd.rustdesk_id else '' %}
         <tr data-host-id="{{ host.id }}"
-            data-search="{{ (host.name ~ ' ' ~ host.hostname ~ ' ' ~ host.ip ~ ' ' ~ host.group_name ~ ' ' ~ host.os_desc)|lower }}"
+            data-search="{{ (host.name ~ ' ' ~ host.hostname ~ ' ' ~ host.ip ~ ' ' ~ rd_id ~ ' ' ~ host.group_name ~ ' ' ~ host.os_desc)|lower }}"
             data-status="{% if not host.is_online %}offline{% elif problem %}problem{% else %}online{% endif %}"
             data-sort-cpu="{{ host.cpu_percent if host.cpu_percent is not none else '' }}"
             data-sort-mem="{{ host.mem_percent if host.mem_percent is not none else '' }}"
@@ -98,6 +106,18 @@
           <td class="host-cell">
             <a class="host-link" href="{{ host_url(host.id) }}">{{ host.name }}</a>
             <span class="sub">{{ host.hostname }}{% if host.ip %} · {{ host.ip }}{% endif %}</span>
+          </td>
+          <td class="rd-cell">
+            {% if rd_id %}
+              <a class="btn btn-small btn-rd" href="{{ rustdesk_connect_url(host.id) }}"
+                 title="Открыть RustDesk ID {{ rd_id }} (через API мониторинга)">RustDesk</a>
+              <button class="btn btn-small btn-ghost" type="button" data-copy="{{ rd_id }}"
+                      title="Скопировать RustDesk ID">ID</button>
+              <span class="sub mono" title="{% if rd.version %}версия {{ rd.version }} · {% endif %}книга {% if rd.source_mtime %}{{ rd.source_mtime|localtime('%d.%m.%Y') }}{% else %}без даты{% endif %}">{{ rd_id }}</span>
+              {% if rustdesk_stale %}<span class="badge badge-warn">книга устарела</span>{% endif %}
+            {% else %}
+              <span class="muted">—</span>
+            {% endif %}
           </td>
           <td class="muted">{{ host.group_name or '—' }}</td>
           <td class="num">
@@ -119,7 +139,7 @@
         </tr>
       {% else %}
         <tr>
-          <td colspan="10" class="empty">
+          <td colspan="11" class="empty">
             Пока пусто. Если агенты уже стоят в MeshCentral — нажми «Обновить инвентарь» и проверь логи:
             <code>make monitor-logs</code>.
           </td>

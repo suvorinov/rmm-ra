@@ -23,7 +23,7 @@ GREEN  = \033[0;32m
 YELLOW = \033[1;33m
 NC     = \033[0m # No Color
 
-.PHONY: help up down restart logs logs-mc logs-rd status pull update clean backup lock-registration mesh-groups mesh-doctor pin-cert npm-ws-timeout reset-2fa rustdesk-info rustdesk-book rustdesk-key monitor-up monitor-down monitor-restart monitor-build monitor-logs monitor-status monitor-health monitor-backup monitor-dev-venv monitor-dev-vendor monitor-dev-vendor-update monitor-dev monitor-dev-test monitor-dev-clean
+.PHONY: help up down restart logs logs-mc logs-rd status pull update clean backup lock-registration mesh-groups mesh-doctor pin-cert npm-ws-timeout reset-2fa rustdesk-info rustdesk-book rustdesk-key monitor-up monitor-down monitor-restart monitor-build monitor-logs monitor-status monitor-health monitor-backup monitor-import-rustdesk monitor-dev-venv monitor-dev-vendor monitor-dev-vendor-update monitor-dev monitor-dev-test monitor-dev-clean
 
 help: ## Показать эту справку
 	@echo "$(YELLOW)Доступные команды для управления RMM-RA:$(NC)"
@@ -153,6 +153,16 @@ monitor-backup: ## Сделать согласованный бэкап SQLite �
 	docker exec rmm-monitor rm -f /data/.backup.db; \
 	chmod 600 "$(BACKUP_DIR)/monitor-$$STAMP.db"; \
 	echo "$(GREEN)Бэкап: $(BACKUP_DIR)/monitor-$$STAMP.db$(NC)"
+
+monitor-import-rustdesk: monitor-dev-venv ## Импортировать reports/rustdesk-book.html в SQLite мониторинга
+	@test -f reports/rustdesk-book.html || { \
+		echo "$(YELLOW)Нет reports/rustdesk-book.html.$(NC)"; \
+		echo "  сначала: make rustdesk-book"; \
+		exit 1; }
+	@install -d -m 700 $(MONITOR_DATA_DIR)
+	@cd monitor && ../$(MONITOR_VENV)/bin/python -m app.rustdesk_book \
+		--db "$(abspath $(MONITOR_DATA_DIR))/monitor.db" \
+		--file "$(abspath reports/rustdesk-book.html)"
 
 # -------------------------------------------------------------- dev без Docker
 

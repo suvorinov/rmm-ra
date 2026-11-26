@@ -83,6 +83,36 @@ class Host(Base):
         return f"<Host {self.name} online={self.is_online}>"
 
 
+class RustdeskHost(Base):
+    """Строка из HTML-адресной книги RustDesk. Паролей здесь нет и не будет."""
+
+    __tablename__ = "rustdesk_hosts"
+
+    ip: Mapped[str] = mapped_column(String(64), primary_key=True)
+    rustdesk_id: Mapped[str] = mapped_column(String(32), default="", index=True)
+    version: Mapped[str] = mapped_column(String(64), default="")
+    has_password: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    source_mtime: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    def __repr__(self) -> str:  # pragma: no cover - для отладки
+        return f"<RustdeskHost {self.ip} id={self.rustdesk_id or '-'}>"
+
+
+class RustdeskEvent(Base):
+    """Аудит нажатий «подключиться»: только IP/ID/пользователь, без секретов."""
+
+    __tablename__ = "rustdesk_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    user: Mapped[str] = mapped_column(String(100), default="")
+    host_id: Mapped[str] = mapped_column(String(100), default="")
+    ip: Mapped[str] = mapped_column(String(64), default="")
+    rustdesk_id: Mapped[str] = mapped_column(String(32), default="")
+    status: Mapped[str] = mapped_column(String(16), default="ok")
+
+
 class Snapshot(Base):
     __tablename__ = "snapshots"
     __table_args__ = (Index("ix_snapshots_host_taken", "host_id", "taken_at"),)

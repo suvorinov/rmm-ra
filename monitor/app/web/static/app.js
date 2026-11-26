@@ -98,18 +98,19 @@
     }, 60000);
   }
 
-  document.querySelectorAll("[data-copy]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      const value = button.getAttribute("data-copy") || "";
-      try {
-        await navigator.clipboard.writeText(value);
-        const previous = button.textContent;
-        button.textContent = "скопировано";
-        window.setTimeout(() => { button.textContent = previous; }, 1500);
-      } catch (_error) {
-        window.prompt("Скопируй вручную:", value);
-      }
-    });
+  // Делегирование: кнопки копирования могут появиться позже — в модалке хоста.
+  document.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-copy]");
+    if (!button) return;
+    const value = button.getAttribute("data-copy") || "";
+    try {
+      await navigator.clipboard.writeText(value);
+      const previous = button.textContent;
+      button.textContent = "скопировано";
+      window.setTimeout(() => { button.textContent = previous; }, 1500);
+    } catch (_error) {
+      window.prompt("Скопируй вручную:", value);
+    }
   });
 
   const modal = document.getElementById("host-modal");
@@ -262,6 +263,35 @@
       const common = section("Общая информация");
       common.append(kv);
       content.append(common);
+
+      const rd = data.rustdesk;
+      const rdBlock = section("RustDesk");
+      if (rd && rd.id) {
+        const rdKv = node("dl", "kv");
+        const addRd = (key, value) => {
+          rdKv.append(node("dt", "", key), node("dd", "", value ?? "—"));
+        };
+        addRd("ID", rd.id);
+        addRd("Версия", rd.version || "—");
+        addRd("Пароль задан", rd.has_password === null ? "н/д" : (rd.has_password ? "да" : "нет"));
+        addRd("Книга от", localTime(rd.source_mtime));
+        rdBlock.append(rdKv);
+        if (rd.stale) rdBlock.append(node("div", "notice notice-warn", "Адресная книга устарела — пересоздай её и импортируй заново."));
+        const actions = node("div", "badges");
+        if (rd.connect_url) {
+          const link = node("a", "btn btn-small btn-rd", "Открыть в RustDesk");
+          link.href = rd.connect_url;
+          actions.append(link);
+        }
+        const copy = node("button", "btn btn-small btn-ghost", "Скопировать ID");
+        copy.type = "button";
+        copy.dataset.copy = rd.id;
+        actions.append(copy);
+        rdBlock.append(actions);
+      } else {
+        rdBlock.append(node("p", "muted", "Нет записи в RustDesk-книге для этого IP."));
+      }
+      content.append(rdBlock);
 
       if (data.last_snapshot_status === "error" && data.last_snapshot_error) {
         content.append(node("div", "modal-error",

@@ -46,4 +46,41 @@
   <div class="empty">Задач пока не было.</div>
 {% endif %}
 
+<section class="panel panel-runs">
+  <div class="panel-head">
+    <h2>RustDesk: последние подключения</h2>
+    <span class="muted">кто и когда нажал «подключиться»; без паролей</span>
+  </div>
+  {% if rustdesk_events %}
+    <div class="table-wrap">
+      <table class="table compact">
+        <thead>
+          <tr>
+            <th>Время</th>
+            <th>Пользователь</th>
+            <th>Хост</th>
+            <th>IP</th>
+            <th>RustDesk ID</th>
+            <th>Статус</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for event in rustdesk_events %}
+            <tr>
+              <td class="nowrap">{{ event.at|localtime }}</td>
+              <td>{{ event.user or '—' }}</td>
+              <td class="mono">{{ event.host_id[-12:] }}</td>
+              <td class="mono">{{ event.ip or '—' }}</td>
+              <td class="mono">{{ event.rustdesk_id or '—' }}</td>
+              <td><span class="badge badge-{{ 'ok' if event.status == 'ok' else 'bad' }}">{{ event.status }}</span></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="muted">Подключений через мониторинг ещё не было.</p>
+  {% endif %}
+</section>
+
 {% endblock %}

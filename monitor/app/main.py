@@ -23,7 +23,7 @@ from .mc import MeshCentralClient
 from .scheduler import build_scheduler
 from .timeutil import fmt_local, human_ago, human_duration, human_mb, iso_utc, pct, utcnow
 from .web.routes import router
-from .web.urls import host_url
+from .web.urls import host_url, rustdesk_connect_url
 
 log = logging.getLogger("monitor")
 
@@ -60,18 +60,16 @@ def _secure(response: Response, *, html: bool = False) -> Response:
     return response
 
 
-def _basic_ok(header: str, settings: Settings) -> bool:
+def _basic_credentials(header: str) -> tuple[str, str] | None:
     scheme, _, payload = header.partition(" ")
     if scheme.lower() != "basic" or not payload:
-        return False
+        return None
     try:
         decoded = base64.b64decode(payload, validate=True).decode("utf-8")
     except (ValueError, UnicodeDecodeError):
-        return False
+        return None
     user, _, password = decoded.partition(":")
-    return secrets.compare_digest(user, settings.auth_user) and secrets.compare_digest(
-        password, settings.auth_pass
-    )
+    return user, password
 
 
 def _same_origin(request: Request, settings: Settings) -> bool:
@@ -127,7 +125,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "iso": iso_utc,
         }
     )
-    templates.env.globals.update(version=__version__, tz=settings.tz, host_url=host_url)
+    templates.env.globals.update(
+        version=__version__,
+        tz=settings.tz,
+        host_url=host_url,
+        rustdesk_connect_url=rustdesk_connect_url,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -172,7 +175,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return _secure(await call_next(request))
 
         if settings.auth_enabled:
-            if not _basic_ok(request.headers.get("authorization", ""), settings):
+            credentials = _basic_credentials(request.headers.get("authorization", ""))
+            if credentials is None or not (
+                secrets.compare_digest(credentials[0], settings.auth_user)
+                and secrets.compare_digest(credentials[1], settings.auth_pass)
+            ):
                 return _secure(
                     Response(
                         content="Требуется авторизация",
@@ -183,6 +190,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         },
                     )
                 )
+            # Только имя пользователя — в аудит RustDesk. Пароль никуда не идёт.
+            request.state.auth_user = credentials[0] if credentials else ""
         elif not settings.allow_anonymous:
             return _secure(
                 JSONResponse(
@@ -190,6 +199,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     status_code=503,
                 )
             )
+        else:
+            request.state.auth_user = "anonymous"
 
         if (
             request.method in {"POST", "PUT", "PATCH", "DELETE"}

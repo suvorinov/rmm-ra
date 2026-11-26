@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 import threading
+from datetime import timedelta
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
@@ -15,12 +17,74 @@ from ..collector import (
     snapshot_host,
     snapshot_script,
 )
-from ..models import BrowserSession, Host, JobRun, ProcessSnapshot, Snapshot
+from ..models import (
+    BrowserSession,
+    Host,
+    JobRun,
+    ProcessSnapshot,
+    RustdeskEvent,
+    RustdeskHost,
+    Snapshot,
+)
 from ..timeutil import iso_utc, stale_cutoff, utcnow
 from .charts import sparkline
-from .urls import host_url
+from .urls import host_url, rustdesk_connect_url
 
 router = APIRouter()
+
+RUSTDESK_ID_RE = re.compile(r"^\d{1,20}$")
+RUSTDESK_STALE_DAYS = 7
+
+
+def _rustdesk_dict(entry: RustdeskHost | None, host_id: str = "") -> dict | None:
+    if entry is None:
+        return None
+    rid = entry.rustdesk_id or ""
+    valid = bool(RUSTDESK_ID_RE.fullmatch(rid))
+    stale = (
+        entry.source_mtime is not None
+        and entry.source_mtime < utcnow() - timedelta(days=RUSTDESK_STALE_DAYS)
+    )
+    return {
+        "ip": entry.ip,
+        "id": rid if valid else "",
+        "version": entry.version,
+        "has_password": entry.has_password,
+        "source_mtime": iso_utc(entry.source_mtime),
+        "imported_at": iso_utc(entry.imported_at),
+        "stale": stale,
+        "url": f"rustdesk://connection/new/{rid}" if valid else "",
+        "connect_url": rustdesk_connect_url(host_id) if host_id and valid else "",
+    }
+
+
+def _request_user(request: Request) -> str:
+    return str(getattr(request.state, "auth_user", "") or "anonymous")
+
+
+def _record_rustdesk_event(
+    request: Request,
+    ctx,
+    *,
+    host: Host,
+    entry: RustdeskHost | None,
+    status: str,
+) -> None:
+    """Аудит клика. Никаких паролей — только пользователь, IP и ID."""
+    try:
+        with ctx.db.session() as session:
+            session.add(
+                RustdeskEvent(
+                    at=utcnow(),
+                    user=_request_user(request),
+                    host_id=host.id,
+                    ip=host.ip,
+                    rustdesk_id=(entry.rustdesk_id or "") if entry else "",
+                    status=status,
+                )
+            )
+    except Exception:  # noqa: BLE001 — аудит не должен ломать подключение
+        ctx.log.exception("не удалось записать событие RustDesk")
 
 
 def _ctx(request: Request):
@@ -82,6 +146,16 @@ def dashboard(request: Request) -> HTMLResponse:
                 select(JobRun).order_by(desc(JobRun.started_at)).limit(5)
             ).all()
         )
+        rustdesk_rows = list(session.scalars(select(RustdeskHost)).all())
+    rustdesk = {row.ip: row for row in rustdesk_rows}
+    rustdesk_mtime = max(
+        (row.source_mtime for row in rustdesk_rows if row.source_mtime is not None),
+        default=None,
+    )
+    rustdesk_stale = (
+        rustdesk_mtime is not None
+        and rustdesk_mtime < now - timedelta(days=RUSTDESK_STALE_DAYS)
+    )
     summary = _summarise(hosts, now, ctx.settings.snapshot_interval)
     return _templates(request).TemplateResponse(
         request=request,
@@ -96,6 +170,10 @@ def dashboard(request: Request) -> HTMLResponse:
             last_inventory=last_inventory,
             last_snapshot=last_snapshot,
             recent_runs=recent_runs,
+            rustdesk=rustdesk,
+            rustdesk_total=sum(1 for row in rustdesk_rows if row.rustdesk_id),
+            rustdesk_mtime=rustdesk_mtime,
+            rustdesk_stale=rustdesk_stale,
             queued=request.query_params.get("queued"),
             error=request.query_params.get("err"),
         ),
@@ -111,10 +189,15 @@ def runs_page(request: Request) -> HTMLResponse:
                 select(JobRun).order_by(desc(JobRun.started_at)).limit(200)
             ).all()
         )
+        rustdesk_events = list(
+            session.scalars(
+                select(RustdeskEvent).order_by(desc(RustdeskEvent.at)).limit(50)
+            ).all()
+        )
     return _templates(request).TemplateResponse(
         request=request,
         name="runs.html",
-        context=_page(request, page="runs", runs=runs),
+        context=_page(request, page="runs", runs=runs, rustdesk_events=rustdesk_events),
     )
 
 
@@ -202,7 +285,7 @@ def refresh_host(request: Request, host_id: str) -> RedirectResponse:
 # --------------------------------------------------------------------- JSON API
 
 
-def _host_dict(host: Host) -> dict:
+def _host_dict(host: Host, rustdesk: RustdeskHost | None = None) -> dict:
     return {
         "id": host.id,
         "name": host.name,
@@ -219,6 +302,7 @@ def _host_dict(host: Host) -> dict:
         "last_snapshot_attempt_at": iso_utc(host.last_snapshot_attempt_at),
         "last_snapshot_status": host.last_snapshot_status,
         "last_snapshot_error": host.last_snapshot_error,
+        "rustdesk": _rustdesk_dict(rustdesk, host.id),
         "metrics": {
             "cpu_percent": host.cpu_percent,
             "cpu_model": host.cpu_model,
@@ -257,7 +341,10 @@ def api_hosts(request: Request) -> JSONResponse:
                 select(Host).order_by(desc(Host.is_online), Host.name.asc())
             ).all()
         )
-    return JSONResponse({"hosts": [_host_dict(h) for h in hosts]})
+        books = {row.ip: row for row in session.scalars(select(RustdeskHost)).all()}
+    return JSONResponse(
+        {"hosts": [_host_dict(h, books.get(h.ip) if h.ip else None) for h in hosts]}
+    )
 
 
 @router.get("/api/hosts/{host_id:path}")
@@ -267,8 +354,13 @@ def api_host(request: Request, host_id: str) -> JSONResponse:
         host = session.get(Host, host_id)
         if host is None:
             raise HTTPException(status_code=404, detail="хост не найден")
+        book = (
+            session.scalar(select(RustdeskHost).where(RustdeskHost.ip == host.ip))
+            if host.ip
+            else None
+        )
         latest = latest_snapshot(session, host_id)
-        payload = _host_dict(host)
+        payload = _host_dict(host, book)
         snapshot = None
         if latest is not None:
             processes = list(
@@ -314,6 +406,47 @@ def api_host(request: Request, host_id: str) -> JSONResponse:
             }
         payload["snapshot"] = snapshot
     return JSONResponse(payload)
+
+
+@router.get("/api/rustdesk/connect/{host_id:path}")
+def rustdesk_connect(request: Request, host_id: str):
+    """Единая точка входа: проверяет ID и редиректит в клиент RustDesk.
+
+    Обычная ссылка в таблице ведёт сюда, поэтому браузер делает обычный
+    top-level navigation — зарегистрированный `rustdesk://` срабатывает так же,
+    как в самой адресной книге. ``?format=json`` нужен только для API-клиентов.
+    """
+    ctx = _ctx(request)
+    with ctx.db.session() as session:
+        host = session.get(Host, host_id)
+        if host is None:
+            raise HTTPException(status_code=404, detail="хост не найден")
+        entry = (
+            session.scalar(select(RustdeskHost).where(RustdeskHost.ip == host.ip))
+            if host.ip
+            else None
+        )
+
+    rid = (entry.rustdesk_id or "") if entry else ""
+    if not RUSTDESK_ID_RE.fullmatch(rid):
+        _record_rustdesk_event(request, ctx, host=host, entry=entry, status="missing")
+        raise HTTPException(
+            status_code=404,
+            detail="для хоста нет RustDesk ID: пересоздай книгу и импортируй её",
+        )
+
+    _record_rustdesk_event(request, ctx, host=host, entry=entry, status="ok")
+    url = f"rustdesk://connection/new/{rid}"
+    if request.query_params.get("format") == "json":
+        return JSONResponse(
+            {
+                "host": host.name,
+                "ip": host.ip,
+                "rustdesk_id": rid,
+                "url": url,
+            }
+        )
+    return RedirectResponse(url=url, status_code=302)
 
 
 @router.get("/api/snapshots/{host_id:path}")

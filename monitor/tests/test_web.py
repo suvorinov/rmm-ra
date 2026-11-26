@@ -4,12 +4,20 @@ import json
 from urllib.parse import quote
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from app.collector import upsert_hosts
 from app.main import create_app
-from app.models import BrowserSession, Host, ProcessSnapshot, Snapshot
+from app.models import (
+    BrowserSession,
+    Host,
+    ProcessSnapshot,
+    RustdeskEvent,
+    RustdeskHost,
+    Snapshot,
+)
 from app.timeutil import utcnow
-from app.web.urls import host_url
+from app.web.urls import host_url, rustdesk_connect_url
 
 from .conftest import DEVICE, make_auth_settings
 
@@ -80,6 +88,20 @@ def seed(db, with_snapshot: bool = True):
             ]
         )
         session.commit()
+
+
+def seed_rustdesk(db, *, ip: str = "192.168.0.50", rid: str = "123456789"):
+    with db.session() as session:
+        session.add(
+            RustdeskHost(
+                ip=ip,
+                rustdesk_id=rid,
+                version="1.5.3",
+                has_password=True,
+                source_mtime=utcnow(),
+                imported_at=utcnow(),
+            )
+        )
 
 
 def test_dashboard_host_page_and_api(settings, db):
@@ -213,3 +235,60 @@ def test_dashboard_empty_state(settings, db):
         assert response.status_code == 200
         assert "Пока пусто" in response.text
         assert client.get("/api/summary").json()["total"] == 0
+
+
+def test_rustdesk_button_api_and_audit(settings, db):
+    seed(db, with_snapshot=False)
+    seed_rustdesk(db)
+    app = create_app(make_auth_settings(settings))
+    with TestClient(app) as client:
+        auth = ("admin", "hunter2")
+        page = client.get("/", auth=auth)
+        assert page.status_code == 200
+        assert rustdesk_connect_url(HOST_ID) in page.text
+        assert "123456789" in page.text
+
+        detail = client.get(f"/api/hosts/{HOST_ID}", auth=auth)
+        assert detail.status_code == 200
+        rd = detail.json()["rustdesk"]
+        assert rd["id"] == "123456789"
+        assert rd["url"] == "rustdesk://connection/new/123456789"
+        assert rd["connect_url"] == rustdesk_connect_url(HOST_ID)
+
+        connect = client.get(
+            f"/api/rustdesk/connect/{HOST_ID}", auth=auth, follow_redirects=False
+        )
+        assert connect.status_code == 302
+        assert connect.headers["location"] == "rustdesk://connection/new/123456789"
+
+        as_json = client.get(
+            f"/api/rustdesk/connect/{HOST_ID}",
+            params={"format": "json"},
+            auth=auth,
+        )
+        assert as_json.status_code == 200
+        assert as_json.json()["rustdesk_id"] == "123456789"
+
+        runs = client.get("/runs", auth=auth)
+        assert runs.status_code == 200
+        assert "admin" in runs.text
+        assert "123456789" in runs.text
+
+    with db.session() as session:
+        events = list(session.scalars(select(RustdeskEvent)))
+        assert len(events) == 2
+        assert {event.status for event in events} == {"ok"}
+        assert {event.user for event in events} == {"admin"}
+        assert all(event.ip == "192.168.0.50" for event in events)
+        assert all(event.rustdesk_id == "123456789" for event in events)
+
+
+def test_rustdesk_connect_without_book_entry_is_404(settings, db):
+    seed(db, with_snapshot=False)
+    app = create_app(settings)
+    with TestClient(app) as client:
+        response = client.get(
+            f"/api/rustdesk/connect/{HOST_ID}", follow_redirects=False
+        )
+        assert response.status_code == 404
+        assert response.json()["detail"].startswith("для хоста нет RustDesk ID")

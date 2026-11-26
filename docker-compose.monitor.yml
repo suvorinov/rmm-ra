@@ -17,6 +17,8 @@ services:
       - /tmp:size=32m,mode=1777
     volumes:
       - ./monitor-data:/data
+      # Адресная книга RustDesk: только чтение, в репозиторий не попадает.
+      - ./reports:/app/reports:ro
     networks:
       - zr_admin_net
     security_opt:
